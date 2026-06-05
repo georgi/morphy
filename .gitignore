@@ -7,3 +7,9 @@ build/
 .DS_Store
 .turbo/
 coverage/
+
+# Stray TS build output that must never leak next to the @chess/shared source
+# (the real build emits to packages/shared/dist/). Keep the contract single-source.
+packages/shared/src/*.js
+packages/shared/src/*.js.map
+packages/shared/src/*.d.ts

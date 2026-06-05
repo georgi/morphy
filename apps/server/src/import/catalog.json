@@ -1,0 +1,42 @@
+[
+  {
+    "id": "morphy-opera-1858",
+    "title": "Morphy: The Opera Game (1858)",
+    "description": "Paul Morphy's immortal miniature against the Duke of Brunswick and Count Isouard — a model of rapid development and open lines. Bundled offline.",
+    "gameCount": 1,
+    "url": "https://www.pgnmentor.com/players/Morphy.pgn",
+    "bundled": true
+  },
+  {
+    "id": "anderssen-immortal-1851",
+    "title": "Anderssen: The Immortal Game (1851)",
+    "description": "Adolf Anderssen's King's Gambit brilliancy versus Kieseritzky, sacrificing both rooks and the queen for mate. Bundled offline.",
+    "gameCount": 1,
+    "url": "https://www.pgnmentor.com/players/Anderssen.pgn",
+    "bundled": true
+  },
+  {
+    "id": "world-championships",
+    "title": "World Chess Championships",
+    "description": "Games from the classical World Championship matches — Steinitz through the modern title bouts.",
+    "url": "https://www.pgnmentor.com/events/Worldch.pgn"
+  },
+  {
+    "id": "fischer-games",
+    "title": "Bobby Fischer — Collected Games",
+    "description": "The collected tournament and match games of the eleventh World Champion, Robert James Fischer.",
+    "url": "https://www.pgnmentor.com/players/Fischer.pgn"
+  },
+  {
+    "id": "kasparov-games",
+    "title": "Garry Kasparov — Collected Games",
+    "description": "The collected games of the thirteenth World Champion, Garry Kasparov.",
+    "url": "https://www.pgnmentor.com/players/Kasparov.pgn"
+  },
+  {
+    "id": "morphy-games",
+    "title": "Paul Morphy — Collected Games",
+    "description": "The collected games of Paul Morphy, the unofficial world's strongest player of the 1850s.",
+    "url": "https://www.pgnmentor.com/players/Morphy.pgn"
+  }
+]
