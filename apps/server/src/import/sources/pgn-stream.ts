@@ -28,7 +28,15 @@ export async function* splitPgnStream(
     const games = splitter.split(buffer);
     if (games.length <= 1) return; // nothing safely complete yet
     for (const game of games.slice(0, -1)) yield game;
-    buffer = games[games.length - 1];
+    // `split` trims each returned game, which would drop the blank-line separator
+    // between the carried (still-growing) last game and the next chunk — welding
+    // e.g. lichess's per-game chunks into `… 1-0[Event …]` and hiding the
+    // boundary. The last game sits at the END of the buffer, so the whitespace
+    // trim removed from it is exactly the buffer's trailing whitespace; re-attach
+    // precisely that to carry the game over verbatim (a mid-token cut like
+    // `[Site "https` has no trailing whitespace, so it is left untouched).
+    const trailing = buffer.slice(buffer.trimEnd().length);
+    buffer = games[games.length - 1] + trailing;
   };
 
   try {
