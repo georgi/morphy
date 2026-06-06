@@ -6,6 +6,7 @@ import {
   ChevronRight,
   FlipVertical2,
   AlertTriangle,
+  Waypoints,
 } from "lucide-react";
 import type { MoveEval } from "@chess/shared";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,8 @@ export function BoardControls() {
   const prevPly = useAnalyzerStore((s) => s.prevPly);
   const nextPly = useAnalyzerStore((s) => s.nextPly);
   const flip = useAnalyzerStore((s) => s.flip);
+  const arrowsEnabled = useAnalyzerStore((s) => s.arrowsEnabled);
+  const toggleArrows = useAnalyzerStore((s) => s.toggleArrows);
   const currentPly = useAnalyzerStore((s) => s.currentPly);
   const moveCount = useAnalyzerStore((s) => s.game?.moves.length ?? 0);
   const analysis = useAnalyzerStore((s) => s.analysis);
@@ -99,6 +102,16 @@ export function BoardControls() {
         aria-label="Flip board"
       >
         <FlipVertical2 />
+      </Button>
+      <Button
+        variant="outline"
+        size="icon"
+        onClick={toggleArrows}
+        aria-pressed={arrowsEnabled}
+        aria-label="Toggle best-move arrows"
+        className={arrowsEnabled ? "bg-primary/10 text-primary" : undefined}
+      >
+        <Waypoints />
       </Button>
       <Button
         variant="outline"

@@ -10,28 +10,23 @@ import {
 import { useAnalyzerStore, currentFen } from "@/store";
 import { EvalBar } from "@/components/board/EvalBar";
 import { BoardControls } from "@/components/board/BoardControls";
+import { BestMoveArrows } from "@/components/board/BestMoveArrows";
 import { CoachBanner } from "@/components/coach/CoachBanner";
+import { useBestMoveArrows } from "@/hooks/useBestMoveArrows";
 import * as api from "@/lib/api";
 
-/** UCI move (e.g. "e2e4", "g7g8q") → a green best-move arrow, or null if invalid. */
-function bestMoveArrow(uci: string | null | undefined): Arrow | null {
-  if (!uci || uci.length < 4) return null;
-  return {
-    startSquare: uci.slice(0, 2),
-    endSquare: uci.slice(2, 4),
-    color: "#15803d",
-  };
-}
+/** Ember accent for the coach-reveal arrow (DESIGN.md, rank-1 best-move color). */
+const EMBER = "oklch(0.63 0.14 48)";
 
 /**
- * SAN best move (e.g. "Nf3", "exd8=Q") played from `fen` → a green arrow, or
+ * SAN best move (e.g. "Nf3", "exd8=Q") played from `fen` → an ember arrow, or
  * null if the move doesn't apply. Squares are derived client-side via chess.js.
  */
 function sanArrow(fen: string, san: string | null): Arrow | null {
   if (!san) return null;
   try {
     const move = new Chess(fen).move(san);
-    return { startSquare: move.from, endSquare: move.to, color: "#15803d" };
+    return { startSquare: move.from, endSquare: move.to, color: EMBER };
   } catch {
     return null;
   }
@@ -42,7 +37,10 @@ function sanArrow(fen: string, san: string | null): Arrow | null {
  * chess.js (auto-queening promotions). An illegal move returns false so the
  * piece snaps back; a legal one is sent to the agent as the user's guess.
  */
-function onCoachDrop({ sourceSquare, targetSquare }: PieceDropHandlerArgs): boolean {
+function onCoachDrop({
+  sourceSquare,
+  targetSquare,
+}: PieceDropHandlerArgs): boolean {
   const store = useAnalyzerStore.getState();
   const question = store.coach.current;
   if (!question || !targetSquare) return false;
@@ -82,19 +80,23 @@ function onCoachDrop({ sourceSquare, targetSquare }: PieceDropHandlerArgs): bool
  * Left column: vertical eval bar + analysis board + nav controls.
  *
  * Outside an interactive review the board is read-only: it follows the store's
- * `currentFen` selector and `orientation`, with a single best-move arrow drawn
- * from the current ply's evaluation. During a review (`coach.mode`):
+ * `currentFen` selector and `orientation`, and the {@link BestMoveArrows} SVG
+ * overlay (fed by {@link useBestMoveArrows}) draws the engine's ranked top moves
+ * for the current position. The library's own `arrows` prop is left empty in this
+ * mode — the overlay replaces the old single green best-move arrow. During a
+ * review (`coach.mode`):
  * - `question` → the board shows the turning point and pieces become draggable
  *   so the user can play a better move (validated + sent in {@link onCoachDrop}).
- * - `reveal`   → the board stays on the reviewed position and overlays the
- *   engine's best move as an arrow.
+ * - `reveal`   → the board stays on the reviewed position and draws the engine's
+ *   best move as a single ember library arrow (the overlay self-suppresses here,
+ *   since the hook yields `[]` during coach modes).
  * The {@link CoachBanner} sits above the board in both review modes.
  */
 export function BoardPanel() {
   const fen = useAnalyzerStore(currentFen);
   const orientation = useAnalyzerStore((s) => s.orientation);
-  const bestMove = useAnalyzerStore((s) => s.evalByPly[s.currentPly]?.bestMove);
   const coach = useAnalyzerStore((s) => s.coach);
+  const arrows = useBestMoveArrows();
 
   const options: ChessboardOptions = useMemo(() => {
     const base: ChessboardOptions = {
@@ -115,7 +117,10 @@ export function BoardPanel() {
     }
 
     if (coach.mode === "reveal" && coach.current) {
-      const arrow = sanArrow(coach.current.fen, coach.lastReveal?.bestMove ?? null);
+      const arrow = sanArrow(
+        coach.current.fen,
+        coach.lastReveal?.bestMove ?? null,
+      );
       return {
         ...base,
         position: coach.current.fen,
@@ -124,22 +129,24 @@ export function BoardPanel() {
       };
     }
 
-    const arrow = bestMoveArrow(bestMove);
+    // Normal review: the SVG overlay owns the best-move arrows, so the library's
+    // `arrows` prop stays empty.
     return {
       ...base,
       position: fen,
       allowDragging: false,
-      arrows: arrow ? [arrow] : [],
+      arrows: [],
     };
-  }, [fen, orientation, bestMove, coach]);
+  }, [fen, orientation, coach]);
 
   return (
     <div className="flex h-full flex-col gap-3 p-3">
       {coach.mode !== "idle" && <CoachBanner />}
       <div className="flex min-h-0 flex-1 items-center justify-center gap-3">
         <EvalBar />
-        <div className="aspect-square w-full max-w-[560px]">
+        <div className="relative aspect-square w-full max-w-[560px]">
           <Chessboard options={options} />
+          <BestMoveArrows arrows={arrows} orientation={orientation} />
         </div>
       </div>
       <BoardControls />

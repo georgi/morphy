@@ -3,6 +3,7 @@ import type { Move, MoveClassification, MoveEval } from "@chess/shared";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAnalyzerStore } from "@/store";
 import { cn } from "@/lib/utils";
+import { formatScore } from "@/lib/eval";
 
 /** A single move-number row: the white ply and (optionally) the black ply. */
 interface MoveRow {
@@ -32,12 +33,9 @@ function classificationColor(c: MoveClassification): string {
   }
 }
 
-/** Format a centipawn score from White's perspective as a +/- pawn readout. */
+/** Post-move White-POV eval readout, shared with the eval bar and arrow chips. */
 function formatEval(evaluation: MoveEval): string | null {
-  if (evaluation.scoreCpAfter === null) return null;
-  const pawns = evaluation.scoreCpAfter / 100;
-  const sign = pawns > 0 ? "+" : "";
-  return `${sign}${pawns.toFixed(1)}`;
+  return formatScore(evaluation.scoreCpAfter);
 }
 
 /** Group the flat ply list into White/Black rows keyed by move number. */

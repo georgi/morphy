@@ -184,6 +184,14 @@ export interface AnalyzerState {
   currentPly: number;
   orientation: Orientation;
   evalByPly: Record<number, EngineEval>;
+  /**
+   * Best-move-arrow evals keyed by FEN (any position, not just in-game plies).
+   * Filled cache-first/live by the arrows hook; cleared on `setGame` to avoid
+   * unbounded growth across games.
+   */
+  arrowEvalByFen: Record<string, EngineEval>;
+  /** Whether best-move arrows are drawn. Persisted to localStorage. */
+  arrowsEnabled: boolean;
   analysis: MoveEval[] | null;
   chat: ChatMessage[];
   streaming: boolean;
@@ -202,6 +210,8 @@ export interface AnalyzerState {
   prevPly: () => void;
   flip: () => void;
   setEvalForPly: (ply: number, evaluation: EngineEval) => void;
+  setArrowEval: (fen: string, evaluation: EngineEval) => void;
+  toggleArrows: () => void;
   setAnalysis: (evals: MoveEval[]) => void;
   appendUserMessage: (text: string) => void;
   startAssistantMessage: () => void;
@@ -214,7 +224,37 @@ export interface AnalyzerState {
   clearCoach: () => void;
 }
 
-const IDLE_COACH: CoachState = { mode: "idle", current: null, lastReveal: null };
+const IDLE_COACH: CoachState = {
+  mode: "idle",
+  current: null,
+  lastReveal: null,
+};
+
+/** localStorage key for the persisted best-move-arrows toggle. */
+const ARROWS_ENABLED_KEY = "chess:arrowsEnabled";
+
+/**
+ * Read the persisted arrows toggle, defaulting to `true`. Guarded so jsdom/SSR
+ * (no `window`/`localStorage`) and storage exceptions never break the store.
+ */
+function readArrowsEnabled(): boolean {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return true;
+    return window.localStorage.getItem(ARROWS_ENABLED_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+/** Persist the arrows toggle; silently ignored where storage is unavailable. */
+function writeArrowsEnabled(enabled: boolean): void {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    window.localStorage.setItem(ARROWS_ENABLED_KEY, String(enabled));
+  } catch {
+    // Best-effort persistence; a failure here must not affect state.
+  }
+}
 
 /** Clamp a target ply into the valid range for the active game. */
 function clampPly(game: Game | null, n: number): number {
@@ -229,6 +269,8 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
   currentPly: 0,
   orientation: "white",
   evalByPly: {},
+  arrowEvalByFen: {},
+  arrowsEnabled: readArrowsEnabled(),
   analysis: null,
   chat: [],
   streaming: false,
@@ -242,6 +284,7 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
       currentPly: 0,
       analysis: game.analysis ?? null,
       evalByPly: {},
+      arrowEvalByFen: {},
       agentFen: null,
       // A fresh game ends any review in progress.
       coach: IDLE_COACH,
@@ -250,10 +293,16 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
   gotoPly: (n) => set({ currentPly: clampPly(get().game, n), agentFen: null }),
 
   nextPly: () =>
-    set({ currentPly: clampPly(get().game, get().currentPly + 1), agentFen: null }),
+    set({
+      currentPly: clampPly(get().game, get().currentPly + 1),
+      agentFen: null,
+    }),
 
   prevPly: () =>
-    set({ currentPly: clampPly(get().game, get().currentPly - 1), agentFen: null }),
+    set({
+      currentPly: clampPly(get().game, get().currentPly - 1),
+      agentFen: null,
+    }),
 
   flip: () =>
     set((s) => ({
@@ -262,6 +311,18 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
 
   setEvalForPly: (ply, evaluation) =>
     set((s) => ({ evalByPly: { ...s.evalByPly, [ply]: evaluation } })),
+
+  setArrowEval: (fen, evaluation) =>
+    set((s) => ({
+      arrowEvalByFen: { ...s.arrowEvalByFen, [fen]: evaluation },
+    })),
+
+  toggleArrows: () =>
+    set((s) => {
+      const arrowsEnabled = !s.arrowsEnabled;
+      writeArrowsEnabled(arrowsEnabled);
+      return { arrowsEnabled };
+    }),
 
   setAnalysis: (evals) => set({ analysis: evals }),
 
@@ -297,7 +358,10 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
       const chat = s.chat.slice();
       const last = chat[chat.length - 1];
       if (last && last.role === "assistant") {
-        chat[chat.length - 1] = { ...last, tools: [...last.tools, { tool, ok }] };
+        chat[chat.length - 1] = {
+          ...last,
+          tools: [...last.tools, { tool, ok }],
+        };
       }
       return { chat };
     }),

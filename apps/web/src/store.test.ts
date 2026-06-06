@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Game, EngineEval, MoveEval, ImportEvent } from "@chess/shared";
 import {
   useAnalyzerStore,
@@ -56,6 +56,7 @@ beforeEach(() => {
     currentPly: 0,
     orientation: "white",
     evalByPly: {},
+    arrowEvalByFen: {},
     analysis: null,
     chat: [],
     streaming: false,
@@ -75,10 +76,14 @@ describe("currentFen selector", () => {
     expect(currentFen(useAnalyzerStore.getState())).toBe(game.startFen);
 
     useAnalyzerStore.getState().gotoPly(1);
-    expect(currentFen(useAnalyzerStore.getState())).toBe(game.moves[0].fenAfter);
+    expect(currentFen(useAnalyzerStore.getState())).toBe(
+      game.moves[0].fenAfter,
+    );
 
     useAnalyzerStore.getState().gotoPly(2);
-    expect(currentFen(useAnalyzerStore.getState())).toBe(game.moves[1].fenAfter);
+    expect(currentFen(useAnalyzerStore.getState())).toBe(
+      game.moves[1].fenAfter,
+    );
   });
 
   it("prefers an agent-pushed FEN when one is set", () => {
@@ -147,6 +152,7 @@ describe("setGame", () => {
       currentPly: 5,
       agentFen: "junk",
       evalByPly: { 1: evalAt(10) },
+      arrowEvalByFen: { abc: evalAt(10) },
     });
 
     useAnalyzerStore.getState().setGame(game);
@@ -154,7 +160,65 @@ describe("setGame", () => {
     expect(s.currentPly).toBe(0);
     expect(s.agentFen).toBeNull();
     expect(s.evalByPly).toEqual({});
+    expect(s.arrowEvalByFen).toEqual({});
     expect(s.analysis).toEqual(analysis);
+  });
+});
+
+describe("best-move arrows state", () => {
+  it("stores arrow evals keyed by FEN", () => {
+    const fen = "8/8/8/8/8/8/8/k6K w - - 0 1";
+    useAnalyzerStore.getState().setArrowEval(fen, evalAt(42));
+    expect(
+      useAnalyzerStore.getState().arrowEvalByFen[fen].lines[0].scoreCp,
+    ).toBe(42);
+  });
+
+  it("setArrowEval merges without dropping prior entries", () => {
+    const a = "fen-a";
+    const b = "fen-b";
+    useAnalyzerStore.getState().setArrowEval(a, evalAt(1));
+    useAnalyzerStore.getState().setArrowEval(b, evalAt(2));
+    expect(Object.keys(useAnalyzerStore.getState().arrowEvalByFen)).toEqual([
+      a,
+      b,
+    ]);
+  });
+
+  describe("toggleArrows", () => {
+    let store: Record<string, string>;
+
+    beforeEach(() => {
+      store = {};
+      vi.stubGlobal("localStorage", {
+        getItem: (k: string) => (k in store ? store[k] : null),
+        setItem: (k: string, v: string) => {
+          store[k] = v;
+        },
+        removeItem: (k: string) => {
+          delete store[k];
+        },
+        clear: () => {
+          store = {};
+        },
+      });
+      // Start from a known enabled state regardless of hydration.
+      useAnalyzerStore.setState({ arrowsEnabled: true });
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("flips arrowsEnabled and persists the new value", () => {
+      useAnalyzerStore.getState().toggleArrows();
+      expect(useAnalyzerStore.getState().arrowsEnabled).toBe(false);
+      expect(store["chess:arrowsEnabled"]).toBe("false");
+
+      useAnalyzerStore.getState().toggleArrows();
+      expect(useAnalyzerStore.getState().arrowsEnabled).toBe(true);
+      expect(store["chess:arrowsEnabled"]).toBe("true");
+    });
   });
 });
 
