@@ -24,7 +24,7 @@ function SectionLabel({ children }: { children: string }) {
 export function ReviewPanel() {
   return (
     <div className="flex h-full flex-col bg-card">
-      <div className="space-y-4 border-b border-border p-4">
+      <div className="shrink-0 space-y-4 border-b border-border p-4">
         <GameHeader />
         <KeyMoments />
       </div>

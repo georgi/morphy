@@ -129,8 +129,9 @@ export function AdvantageChart() {
         }}
         onPointerLeave={() => setHoverPly(null)}
       >
-        {/* White-advantage area + a slightly dimmer top edge. */}
-        <path d={area} fill="var(--eval-white)" />
+        {/* Advantage area, filled with the foreground tone so it contrasts
+            with the card in both themes (light area on dark, dark on light). */}
+        <path d={area} fill="var(--foreground)" />
         <path d={curve} fill="none" stroke="var(--border)" strokeWidth={1} />
         {/* Equal (0.5) reference line. */}
         <line

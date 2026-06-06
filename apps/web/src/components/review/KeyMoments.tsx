@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import type { KeyMoment, MoveClassification } from "@chess/shared";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAnalyzerStore } from "@/store";
 import { cn } from "@/lib/utils";
@@ -84,7 +83,9 @@ function MomentCard({
           {glyph}
         </span>
         <span className="font-mono text-sm tabular-nums">
-          {moment.moveNumber}…{moment.san}
+          {moment.moveNumber}
+          {moment.color === "w" ? "." : "…"}
+          {moment.san}
         </span>
         <span
           className="text-xs font-semibold uppercase tracking-wider"
@@ -189,13 +190,11 @@ export function KeyMoments() {
 
   return (
     <Section count={moments.length}>
-      <ScrollArea className="max-h-[40vh]">
-        <div className="flex flex-col gap-2">
-          {moments.map((moment) => (
-            <MomentCard key={moment.ply} moment={moment} onSelect={gotoPly} />
-          ))}
-        </div>
-      </ScrollArea>
+      <div className="flex max-h-[38vh] flex-col gap-2 overflow-y-auto">
+        {moments.map((moment) => (
+          <MomentCard key={moment.ply} moment={moment} onSelect={gotoPly} />
+        ))}
+      </div>
     </Section>
   );
 }

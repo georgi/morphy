@@ -14,6 +14,13 @@ import { GameStore } from "../chess/game.store";
 const MAX_KEY_MOMENTS = 5;
 
 /**
+ * cp-loss at or above which a move is mate-magnitude (a forced mate appeared or
+ * was missed) rather than a finite material/positional swing — phrase it as a
+ * mate instead of an absurd pawn count.
+ */
+const MATE_MAGNITUDE_CP = 50_000;
+
+/**
  * Severity rank per classification, biggest first. Only the three "you erred"
  * classes ever become key moments; the rest are filtered out before ranking.
  */
@@ -202,12 +209,16 @@ export class KeyMomentsService {
    */
   private templatedDescription(moveEval: MoveEval, game: Game): string {
     const noun = CLASS_NOUN[moveEval.classification] ?? "Inaccuracy";
-    const pawns = (moveEval.cpLoss / 100).toFixed(1);
     const better = this.bestMoveSan(moveEval, game);
 
-    const swing = `${noun}: a ${pawns}-pawn swing.`;
-    if (!better) return `${swing} A stronger move was available.`;
-    return `${swing} ${better} held the balance.`;
+    // A mate-magnitude cp-loss means a forced mate appeared (or was missed);
+    // phrase it that way instead of as an absurd pawn count.
+    const lead =
+      moveEval.cpLoss >= MATE_MAGNITUDE_CP
+        ? `${noun}: walks into a forced mate.`
+        : `${noun}: a ${(moveEval.cpLoss / 100).toFixed(1)}-pawn swing.`;
+    if (!better) return `${lead} A stronger move was available.`;
+    return `${lead} ${better} held the balance.`;
   }
 
   /**
@@ -382,7 +393,8 @@ export class KeyMomentsService {
  * the MoveEval, so it surfaces as `M` — the sign is unknown without a mate count.
  */
 function formatWhitePovScore(scoreCp: number | null): string {
-  if (scoreCp === null) return "M";
+  // A null centipawn score is a mate line (no finite value); show the mate glyph.
+  if (scoreCp === null) return "#";
   const pawns = scoreCp / 100;
   return `${pawns >= 0 ? "+" : "−"}${Math.abs(pawns).toFixed(1)}`;
 }

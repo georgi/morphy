@@ -56,12 +56,12 @@ export function EvalBar() {
         <span
           className={
             "pointer-events-none absolute inset-x-0 text-center text-[9px] font-semibold tabular-nums " +
-            // The readout sits over the side that's ahead: over the light
-            // `--eval-white` fill it reads in the dark background tone; over the
-            // neutral `--eval-track` it reads in warm-paper foreground.
+            // The readout sits over the side that's ahead, tinted to contrast
+            // with that fill in either theme: over the light `--eval-white` fill
+            // it uses the dark track tone; over the dark track, the white tone.
             (whiteAdvantage
-              ? "bottom-0.5 [color:var(--background)]"
-              : "top-0.5 [color:var(--foreground)]")
+              ? "bottom-0.5 [color:var(--eval-track)]"
+              : "top-0.5 [color:var(--eval-white)]")
           }
         >
           {readout}

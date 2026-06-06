@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
-import type { EngineEval, MoveEval } from '@chess/shared';
-import type { AnalyzeOptions } from '../engine/engine.service';
-import { CachedEngine } from '../engine/cached-engine';
-import { ChessService } from '../chess/chess.service';
-import { GameStore } from '../chess/game.store';
+import { Injectable } from "@nestjs/common";
+import { Chess } from "chess.js";
+import type { EngineEval, MoveEval } from "@chess/shared";
+import type { AnalyzeOptions } from "../engine/engine.service";
+import { CachedEngine } from "../engine/cached-engine";
+import { ChessService } from "../chess/chess.service";
+import { GameStore } from "../chess/game.store";
 
 /**
  * Centipawn magnitude used to score a mate-in-N when reducing it to a single
@@ -54,12 +55,17 @@ export class AnalysisService {
 
     // EngineEval scores are White-POV; convert to the mover's POV so a positive
     // cp-loss always means "this move hurt the side that made it".
-    const moverSign = move.color === 'w' ? 1 : -1;
+    const moverSign = move.color === "w" ? 1 : -1;
     const scoreCpBefore = topScoreCp(before);
     const scoreCpAfter = topScoreCp(after);
 
+    // A move into a terminal position (checkmate / stalemate) yields no engine
+    // lines, so povCp() would read 0 — making a *mating* move look like a total
+    // loss (and get flagged as a blunder). Resolve the score from the position
+    // itself in that case.
+    const afterWhiteCp = terminalWhitePovCp(fenAfter) ?? povCp(after);
     const beforePov = moverSign * povCp(before);
-    const afterPov = moverSign * povCp(after);
+    const afterPov = moverSign * afterWhiteCp;
     const cpLoss = Math.max(0, beforePov - afterPov);
 
     return {
@@ -83,7 +89,10 @@ export class AnalysisService {
    *
    * @throws Error if no game with `gameId` is stored.
    */
-  async analyzeGame(gameId: string, depth = DEFAULT_GAME_DEPTH): Promise<MoveEval[]> {
+  async analyzeGame(
+    gameId: string,
+    depth = DEFAULT_GAME_DEPTH,
+  ): Promise<MoveEval[]> {
     const game = this.store.get(gameId);
     if (!game) {
       throw new Error(`Game not found: ${gameId}`);
@@ -149,4 +158,23 @@ function topScoreCp(evaluation: EngineEval): number | null {
   const line = evaluation.lines[0];
   if (!line) return null;
   return line.scoreCp;
+}
+
+/**
+ * White-POV score for a TERMINAL position, where the engine returns no lines.
+ * Checkmate → the side to move is mated, so the *other* color gets ±MATE_SCORE_CP
+ * (White-POV); stalemate / dead draws → 0; any non-terminal position → null, so
+ * callers fall back to the engine's evaluation. This stops a mate-delivering move
+ * from being scored as a catastrophic loss (its post-position has no engine eval).
+ */
+export function terminalWhitePovCp(fen: string): number | null {
+  const chess = new Chess(fen);
+  if (chess.isCheckmate()) {
+    // The side to move is checkmated; the winner is the other color.
+    return chess.turn() === "b" ? MATE_SCORE_CP : -MATE_SCORE_CP;
+  }
+  if (chess.isStalemate() || chess.isInsufficientMaterial() || chess.isDraw()) {
+    return 0;
+  }
+  return null;
 }

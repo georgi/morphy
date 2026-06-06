@@ -79,9 +79,11 @@
   /* Board squares: warm, low-chroma; lighter than dark theme. */
   --board-light: oklch(0.8 0.02 70);
   --board-dark: oklch(0.62 0.025 65);
-  /* Advantage: a lightness axis (white-advantage fill) on a neutral track. */
-  --eval-white: oklch(0.3 0.006 60);
-  --eval-track: oklch(0.85 0.006 70);
+  /* The eval bar is white-light over black-dark in BOTH themes (like a real
+     eval bar), so these are theme-independent. The advantage chart fills its
+     area with --foreground instead, which contrasts in either theme. */
+  --eval-white: oklch(0.93 0.006 75);
+  --eval-track: oklch(0.3 0.006 60);
   /* Ember hover / lighter brand tint. */
   --ember-soft: oklch(0.66 0.12 50);
   /* Move-quality severity aliases, welded to chart-* + glyph + shape. */

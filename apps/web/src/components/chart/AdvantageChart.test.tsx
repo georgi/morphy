@@ -123,7 +123,7 @@ describe("AdvantageChart", () => {
     const fills = [...container.querySelectorAll("path")].map((p) =>
       p.getAttribute("fill"),
     );
-    expect(fills).toContain("var(--eval-white)");
+    expect(fills).toContain("var(--foreground)");
 
     // The ember playhead and equal midline use design tokens, not hex.
     const strokes = [...container.querySelectorAll("line")].map((l) =>
