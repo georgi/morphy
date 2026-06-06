@@ -23,11 +23,11 @@ const CLASSIFICATION_GLYPH: Partial<Record<MoveClassification, string>> = {
 function classificationColor(c: MoveClassification): string {
   switch (c) {
     case "blunder":
-      return "text-destructive";
+      return "text-[var(--class-blunder)]";
     case "mistake":
-      return "text-orange-500 dark:text-orange-400";
+      return "text-[var(--class-mistake)]";
     case "inaccuracy":
-      return "text-yellow-600 dark:text-yellow-500";
+      return "text-[var(--class-inaccuracy)]";
     default:
       return "";
   }
@@ -43,7 +43,11 @@ function toRows(moves: Move[]): MoveRow[] {
   const rows: MoveRow[] = [];
   let current: MoveRow | undefined;
   for (const move of moves) {
-    if (move.color === "w" || !current || current.moveNumber !== move.moveNumber) {
+    if (
+      move.color === "w" ||
+      !current ||
+      current.moveNumber !== move.moveNumber
+    ) {
       current = { moveNumber: move.moveNumber };
       rows.push(current);
     }
@@ -68,7 +72,9 @@ function MoveCell({
   activeRef: React.Ref<HTMLButtonElement>;
 }) {
   const classification = evaluation?.classification;
-  const glyph = classification ? CLASSIFICATION_GLYPH[classification] : undefined;
+  const glyph = classification
+    ? CLASSIFICATION_GLYPH[classification]
+    : undefined;
   const evalText = evaluation ? formatEval(evaluation) : null;
   const color = classification ? classificationColor(classification) : "";
 
@@ -88,7 +94,9 @@ function MoveCell({
         {glyph ? <span className="ml-0.5 font-semibold">{glyph}</span> : null}
       </span>
       {evalText ? (
-        <span className="ml-auto text-xs text-muted-foreground">{evalText}</span>
+        <span className="ml-auto text-xs text-muted-foreground">
+          {evalText}
+        </span>
       ) : null}
     </button>
   );

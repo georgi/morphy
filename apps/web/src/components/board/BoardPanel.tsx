@@ -105,6 +105,14 @@ export function BoardPanel() {
       showAnimations: true,
       animationDurationInMs: 200,
       clearArrowsOnPositionChange: true,
+      // Warm "Lamplit Study" board (DESIGN.md §2). The CSS vars resolve through
+      // the DOM, so the squares track the active theme; notation is drawn in the
+      // opposite square's tint so coordinates stay legible against the felt.
+      lightSquareStyle: { backgroundColor: "var(--board-light)" },
+      darkSquareStyle: { backgroundColor: "var(--board-dark)" },
+      lightSquareNotationStyle: { color: "var(--board-dark)" },
+      darkSquareNotationStyle: { color: "var(--board-light)" },
+      showNotation: true,
     };
 
     if (coach.mode === "question" && coach.current) {

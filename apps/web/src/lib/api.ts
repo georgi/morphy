@@ -17,6 +17,7 @@ import type {
   StartImportRequest,
   ImportJob,
   ImportEvent,
+  KeyMoment,
 } from "@chess/shared";
 
 const BASE = "/api";
@@ -81,6 +82,18 @@ export function analyzeGame(body: AnalyzeGameRequest): Promise<MoveEval[]> {
   return request<MoveEval[]>("/analysis/game", {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Surface a game's decisive moments (inaccuracies/mistakes/blunders, capped, with
+ * the turning point flagged) for the review panel. Returns `[]` when the game has
+ * no analysis yet, so the caller can show an "analyze to see key moments" state.
+ */
+export function keyMoments(gameId: string): Promise<KeyMoment[]> {
+  return request<KeyMoment[]>("/analysis/key-moments", {
+    method: "POST",
+    body: JSON.stringify({ gameId }),
   });
 }
 
@@ -179,13 +192,10 @@ export async function sendAgentMessage(
   sessionId: string,
   body: AgentMessageRequest,
 ): Promise<void> {
-  await request<unknown>(
-    `/agent/${encodeURIComponent(sessionId)}/messages`,
-    {
-      method: "POST",
-      body: JSON.stringify(body),
-    },
-  );
+  await request<unknown>(`/agent/${encodeURIComponent(sessionId)}/messages`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 /**

@@ -8,17 +8,28 @@ import {
 } from "@/components/ui/resizable";
 import { Separator } from "@/components/ui/separator";
 import { BoardPanel } from "@/components/board/BoardPanel";
-import { MoveList } from "@/components/moves/MoveList";
+import { ReviewPanel } from "@/components/review/ReviewPanel";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { ImportDialog, useAnalyzeGame } from "@/components/import/ImportDialog";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { useAnalyzerStore } from "@/store";
 
 /**
- * Subtitle for the top bar: the loaded game's matchup (and result when known),
- * or a prompt to import when nothing is loaded yet.
+ * Read a header field, treating blank strings and the PGN `"?"` placeholder as
+ * absent so the subtitle never shows noise.
  */
-function GameSummary() {
+function header(value: string | undefined): string | undefined {
+  const raw = value?.trim();
+  if (!raw || raw === "?") return undefined;
+  return raw;
+}
+
+/**
+ * Top-bar subtitle: "Reviewing · {eco opening}" for the loaded game, or a prompt
+ * to import when nothing is loaded yet. Omitted entirely when there is a game but
+ * no opening metadata to name.
+ */
+function ReviewingSubtitle() {
   const game = useAnalyzerStore((s) => s.game);
   if (!game) {
     return (
@@ -28,32 +39,36 @@ function GameSummary() {
     );
   }
 
-  const white = game.headers.white ?? "White";
-  const black = game.headers.black ?? "Black";
-  const result = game.headers.result;
+  const opening = [header(game.headers.eco), header(game.headers.opening)]
+    .filter(Boolean)
+    .join(" ");
+  if (!opening) return null;
+
   return (
     <span className="hidden truncate text-sm text-muted-foreground sm:inline">
-      {white} vs {black}
-      {result && result !== "*" ? ` · ${result}` : ""}
+      Reviewing · {opening}
     </span>
   );
 }
 
 /**
- * The single analysis route. Top bar (import + analyze) over a three-pane
- * resizable layout: board + eval bar + controls | move list | agent chat.
+ * The single analysis route. An ember-branded top bar over a three-pane
+ * resizable layout: the board, the review surface (header → key moments → moves →
+ * advantage), and a collapsible agent chat as the smallest third pane.
  */
 export function AnalysisView() {
   const { analyze, isPending, canAnalyze } = useAnalyzeGame();
 
   return (
-    <div className="flex h-screen flex-col">
-      <header className="flex items-center gap-3 border-b px-4 py-2">
+    <div className="flex h-screen flex-col bg-background">
+      <header className="flex items-center gap-3 border-b border-border px-4 py-2">
+        {/* Ember square logo — the brand mark, the one warm pool of light. */}
+        <span aria-hidden className="size-6 shrink-0 rounded-md bg-primary" />
         <h1 className="text-lg font-semibold">Chess Analyzer</h1>
         <Separator orientation="vertical" className="!h-5" />
-        <GameSummary />
+        <ReviewingSubtitle />
         <div className="ml-auto flex items-center gap-2">
-          <Button variant="outline" size="sm" asChild>
+          <Button variant="ghost" size="sm" asChild>
             <Link to="/library">
               <Library />
               Library
@@ -61,7 +76,7 @@ export function AnalysisView() {
           </Button>
           <ImportDialog />
           <Button
-            variant="outline"
+            variant="default"
             size="sm"
             onClick={analyze}
             disabled={!canAnalyze}
@@ -75,23 +90,20 @@ export function AnalysisView() {
       </header>
 
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-        <ResizablePanel defaultSize={45} minSize={30}>
+        <ResizablePanel defaultSize={42} minSize={30}>
           <BoardPanel />
         </ResizablePanel>
         <ResizableHandle withHandle />
-        <ResizablePanel defaultSize={25} minSize={15}>
-          <div className="flex h-full flex-col">
-            <div className="px-3 py-2 text-sm font-medium text-muted-foreground">
-              Moves
-            </div>
-            <Separator />
-            <div className="min-h-0 flex-1">
-              <MoveList />
-            </div>
-          </div>
+        <ResizablePanel defaultSize={33} minSize={22}>
+          <ReviewPanel />
         </ResizablePanel>
         <ResizableHandle withHandle />
-        <ResizablePanel defaultSize={30} minSize={20}>
+        <ResizablePanel
+          defaultSize={25}
+          minSize={16}
+          collapsible
+          collapsedSize={0}
+        >
           <ChatPanel />
         </ResizablePanel>
       </ResizablePanelGroup>

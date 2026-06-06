@@ -41,7 +41,7 @@ export function EvalBar() {
 
   return (
     <div
-      className="relative flex h-full w-6 flex-col overflow-hidden rounded bg-zinc-800"
+      className="relative flex h-full w-6 flex-col overflow-hidden rounded [background:var(--eval-track)]"
       data-ply={currentPly}
       role="img"
       aria-label={`Engine evaluation ${readout}`}
@@ -49,16 +49,19 @@ export function EvalBar() {
     >
       {/* White fill grows from the bottom. */}
       <div
-        className="mt-auto w-full bg-zinc-100 transition-[height] duration-200 ease-out"
+        className="mt-auto w-full transition-[height] duration-200 ease-out [background:var(--eval-white)]"
         style={{ height: `${whitePct}%` }}
       />
       {hasEval && (
         <span
           className={
             "pointer-events-none absolute inset-x-0 text-center text-[9px] font-semibold tabular-nums " +
+            // The readout sits over the side that's ahead: over the light
+            // `--eval-white` fill it reads in the dark background tone; over the
+            // neutral `--eval-track` it reads in warm-paper foreground.
             (whiteAdvantage
-              ? "bottom-0.5 text-zinc-800"
-              : "top-0.5 text-zinc-100")
+              ? "bottom-0.5 [color:var(--background)]"
+              : "top-0.5 [color:var(--foreground)]")
           }
         >
           {readout}

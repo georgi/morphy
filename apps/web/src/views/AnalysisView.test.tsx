@@ -105,8 +105,22 @@ describe("AnalysisView smoke render", () => {
     ).toBeDefined();
     expect(screen.getByRole("button", { name: /import/i })).toBeDefined();
     expect(screen.getByRole("button", { name: /analyze game/i })).toBeDefined();
+    expect(screen.getByRole("link", { name: /library/i })).toBeDefined();
     expect(screen.getByTestId("chessboard")).toBeDefined();
     // No game loaded → prompt copy is present.
     expect(screen.getByText(/import a game to begin/i)).toBeDefined();
+  });
+
+  it("composes the review surface: MOVES + ADVANTAGE sections and the chat pane", async () => {
+    renderView();
+    await screen.findByRole("heading", { name: "Chess Analyzer" });
+    // The review panel's labeled sections (uppercased via CSS; text is title-cased).
+    expect(screen.getByText("Moves")).toBeDefined();
+    expect(screen.getByText("Advantage")).toBeDefined();
+    // With no game loaded both the move list and the advantage chart show their
+    // empty states, confirming the review surface mounted both sections.
+    expect(
+      screen.getAllByText(/no game loaded/i).length,
+    ).toBeGreaterThanOrEqual(2);
   });
 });
