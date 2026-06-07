@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useAnalyzerStore } from "@/store";
+import { useAnalyzerStore, currentMainlinePly } from "@/store";
 import { formatScore } from "@/lib/eval";
 import { buildChartModel, plyAtX, type MarkerKind } from "@/lib/advantage";
 
@@ -36,7 +36,7 @@ function scoreLabel(cp: number | null): string {
 export function AdvantageChart() {
   const game = useAnalyzerStore((s) => s.game);
   const analysis = useAnalyzerStore((s) => s.analysis);
-  const currentPly = useAnalyzerStore((s) => s.currentPly);
+  const currentPly = useAnalyzerStore(currentMainlinePly);
   const gotoPly = useAnalyzerStore((s) => s.gotoPly);
 
   const ref = useRef<HTMLDivElement>(null);

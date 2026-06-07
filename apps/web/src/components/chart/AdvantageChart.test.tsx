@@ -62,18 +62,18 @@ const ANALYSIS: MoveEval[] = [
 
 afterEach(() => {
   cleanup();
-  useAnalyzerStore.setState({ game: null, analysis: null, currentPly: 0 });
+  useAnalyzerStore.setState({ game: null, analysis: null });
 });
 
 describe("AdvantageChart", () => {
   it("shows a placeholder until the game is analyzed", () => {
-    useAnalyzerStore.setState({ game: GAME, analysis: null, currentPly: 0 });
+    useAnalyzerStore.setState({ game: GAME, analysis: null });
     render(<AdvantageChart />);
     expect(screen.getByText(/analyze game to see evaluation/i)).toBeDefined();
   });
 
   it("renders a placeholder when no game is loaded", () => {
-    useAnalyzerStore.setState({ game: null, analysis: null, currentPly: 0 });
+    useAnalyzerStore.setState({ game: null, analysis: null });
     render(<AdvantageChart />);
     expect(screen.getByText(/no game loaded/i)).toBeDefined();
   });
@@ -82,7 +82,6 @@ describe("AdvantageChart", () => {
     useAnalyzerStore.setState({
       game: GAME,
       analysis: ANALYSIS,
-      currentPly: 0,
     });
     const { container } = render(<AdvantageChart />);
 
@@ -116,7 +115,6 @@ describe("AdvantageChart", () => {
     useAnalyzerStore.setState({
       game: GAME,
       analysis: ANALYSIS,
-      currentPly: 0,
     });
     const { container } = render(<AdvantageChart />);
 
@@ -138,7 +136,6 @@ describe("AdvantageChart", () => {
     useAnalyzerStore.setState({
       game: GAME,
       analysis: ANALYSIS,
-      currentPly: 0,
     });
     const { container } = render(<AdvantageChart />);
 
@@ -160,7 +157,6 @@ describe("AdvantageChart", () => {
     useAnalyzerStore.setState({
       game: GAME,
       analysis: ANALYSIS,
-      currentPly: 0,
       gotoPly,
     });
     render(<AdvantageChart />);
