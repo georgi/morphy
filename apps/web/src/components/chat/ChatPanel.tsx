@@ -8,6 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import {
   useAnalyzerStore,
+  currentMainlinePly,
   type ChatMessage,
   type ChatToolEvent,
 } from "@/store";
@@ -93,7 +94,10 @@ export function ChatPanel() {
     if (!trimmed || streaming) return;
 
     const store = useAnalyzerStore.getState();
-    const { sessionId, game, currentPly } = store;
+    const { sessionId, game } = store;
+    // Branch-point mainline ply: in a variation the agent reasons about the
+    // nearest mainline position (variation-aware chat is a documented follow-up).
+    const currentPly = currentMainlinePly(store);
     store.appendUserMessage(trimmed);
     store.startAssistantMessage();
     setDraft("");
