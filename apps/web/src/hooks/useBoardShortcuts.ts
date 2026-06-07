@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import type { MoveEval } from "@chess/shared";
-import { useAnalyzerStore } from "@/store";
+import { useAnalyzerStore, currentMainlinePly } from "@/store";
+import { lineToLeaf } from "@/lib/moveTree";
 
 /** First ply strictly after `from` flagged a mistake/blunder, or null. */
 function nextMistakePly(analysis: MoveEval[] | null, from: number): number | null {
@@ -47,7 +48,6 @@ export function useBoardShortcuts(): void {
       const store = useAnalyzerStore.getState();
       if (store.coach.mode !== "idle") return;
 
-      const lastPly = store.game?.moves.length ?? 0;
       let handled = true;
 
       switch (e.key) {
@@ -63,7 +63,7 @@ export function useBoardShortcuts(): void {
           break;
         case "ArrowDown":
         case "End":
-          store.gotoPly(lastPly);
+          store.gotoNode(lineToLeaf(store.nodesById, store.currentNodeId));
           break;
         default: {
           switch (e.key.toLowerCase()) {
@@ -74,7 +74,7 @@ export function useBoardShortcuts(): void {
               store.toggleArrows();
               break;
             case "m": {
-              const ply = nextMistakePly(store.analysis, store.currentPly);
+              const ply = nextMistakePly(store.analysis, currentMainlinePly(store));
               if (ply !== null) store.gotoPly(ply);
               break;
             }
