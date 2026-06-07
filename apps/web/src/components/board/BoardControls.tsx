@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import type { MoveEval } from "@chess/shared";
 import { Button } from "@/components/ui/button";
-import { useAnalyzerStore } from "@/store";
+import { useAnalyzerStore, currentMainlinePly, currentNode } from "@/store";
 
 /** The next ply (strictly after `from`) flagged as a mistake or blunder, or null. */
 function nextMistakePly(
@@ -42,17 +42,21 @@ export function BoardControls() {
   const flip = useAnalyzerStore((s) => s.flip);
   const arrowsEnabled = useAnalyzerStore((s) => s.arrowsEnabled);
   const toggleArrows = useAnalyzerStore((s) => s.toggleArrows);
-  const currentPly = useAnalyzerStore((s) => s.currentPly);
+  const currentPly = useAnalyzerStore(currentMainlinePly);
   const moveCount = useAnalyzerStore((s) => s.game?.moves.length ?? 0);
   const analysis = useAnalyzerStore((s) => s.analysis);
+  // Start/end are tree facts: at the root there is no parent; at a leaf there is
+  // no primary continuation. (atEnd covers variation leaves too, not just ply count.)
+  const atRoot = useAnalyzerStore((s) => currentNode(s).parentId === null);
+  const atLeaf = useAnalyzerStore((s) => currentNode(s).children[0] === undefined);
 
   const nextMistake = useMemo(
     () => nextMistakePly(analysis, currentPly),
     [analysis, currentPly],
   );
 
-  const atStart = currentPly <= 0;
-  const atEnd = currentPly >= moveCount;
+  const atStart = atRoot;
+  const atEnd = atLeaf;
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
