@@ -1,5 +1,5 @@
 {
-  "name": "chess-analyzer",
+  "name": "morphy",
   "private": true,
   "type": "module",
   "scripts": {

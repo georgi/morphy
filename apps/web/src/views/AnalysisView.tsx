@@ -64,7 +64,7 @@ export function AnalysisView() {
       <header className="flex items-center gap-3 border-b border-border px-4 py-2">
         {/* Ember square logo — the brand mark, the one warm pool of light. */}
         <span aria-hidden className="size-6 shrink-0 rounded-md bg-primary" />
-        <h1 className="text-lg font-semibold">Chess Analyzer</h1>
+        <h1 className="text-lg font-semibold">Morphy</h1>
         <Separator orientation="vertical" className="!h-5" />
         <ReviewingSubtitle />
         <div className="ml-auto flex items-center gap-2">

@@ -101,7 +101,7 @@ describe("AnalysisView smoke render", () => {
     renderView();
     // The view now mounts inside a router, which resolves the route on a tick.
     expect(
-      await screen.findByRole("heading", { name: "Chess Analyzer" }),
+      await screen.findByRole("heading", { name: "Morphy" }),
     ).toBeDefined();
     expect(screen.getByRole("button", { name: /import/i })).toBeDefined();
     expect(screen.getByRole("button", { name: /analyze game/i })).toBeDefined();
@@ -113,7 +113,7 @@ describe("AnalysisView smoke render", () => {
 
   it("composes the review surface: MOVES + ADVANTAGE sections and the chat pane", async () => {
     renderView();
-    await screen.findByRole("heading", { name: "Chess Analyzer" });
+    await screen.findByRole("heading", { name: "Morphy" });
     // The review panel's labeled sections (uppercased via CSS; text is title-cased).
     expect(screen.getByText("Moves")).toBeDefined();
     expect(screen.getByText("Advantage")).toBeDefined();

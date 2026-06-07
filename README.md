@@ -1,4 +1,4 @@
-# Chess Analyzer
+# Morphy
 
 An AI-native chess analysis web app. Import a game (PGN or FEN), step through it on
 an interactive board with live engine evaluation, and **chat with an agent** that
