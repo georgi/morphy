@@ -60,7 +60,6 @@ beforeEach(() => {
     nodesById: t.nodesById,
     rootId: t.rootId,
     currentNodeId: t.rootId,
-    currentPly: 0,
     orientation: "white",
     evalByPly: {},
     arrowEvalByFen: {},
@@ -108,10 +107,10 @@ describe("navigation", () => {
     useAnalyzerStore.getState().setGame(game);
 
     useAnalyzerStore.getState().gotoPly(99);
-    expect(useAnalyzerStore.getState().currentPly).toBe(2);
+    expect(currentMainlinePly(useAnalyzerStore.getState())).toBe(2);
 
     useAnalyzerStore.getState().gotoPly(-5);
-    expect(useAnalyzerStore.getState().currentPly).toBe(0);
+    expect(currentMainlinePly(useAnalyzerStore.getState())).toBe(0);
   });
 
   it("next/prev step one ply and never escape the range", () => {
@@ -119,14 +118,14 @@ describe("navigation", () => {
     useAnalyzerStore.getState().setGame(game);
 
     useAnalyzerStore.getState().prevPly();
-    expect(useAnalyzerStore.getState().currentPly).toBe(0);
+    expect(currentMainlinePly(useAnalyzerStore.getState())).toBe(0);
 
     useAnalyzerStore.getState().nextPly();
     useAnalyzerStore.getState().nextPly();
-    expect(useAnalyzerStore.getState().currentPly).toBe(2);
+    expect(currentMainlinePly(useAnalyzerStore.getState())).toBe(2);
 
     useAnalyzerStore.getState().nextPly();
-    expect(useAnalyzerStore.getState().currentPly).toBe(2);
+    expect(currentMainlinePly(useAnalyzerStore.getState())).toBe(2);
   });
 
   it("flip toggles orientation", () => {
@@ -222,7 +221,6 @@ describe("setGame", () => {
 
     // dirty the store first
     useAnalyzerStore.setState({
-      currentPly: 5,
       agentFen: "junk",
       evalByPly: { 1: evalAt(10) },
       arrowEvalByFen: { abc: evalAt(10) },
@@ -230,7 +228,7 @@ describe("setGame", () => {
 
     useAnalyzerStore.getState().setGame(game);
     const s = useAnalyzerStore.getState();
-    expect(s.currentPly).toBe(0);
+    expect(currentMainlinePly(s)).toBe(0);
     expect(s.agentFen).toBeNull();
     expect(s.evalByPly).toEqual({});
     expect(s.arrowEvalByFen).toEqual({});
@@ -306,7 +304,7 @@ describe("eval cache + setBoardFromAgent ply path", () => {
     useAnalyzerStore.getState().setGame(game);
     useAnalyzerStore.getState().setBoardFromAgent("ignored", 1);
     const s = useAnalyzerStore.getState();
-    expect(s.currentPly).toBe(1);
+    expect(currentMainlinePly(s)).toBe(1);
     expect(s.agentFen).toBeNull();
     expect(currentFen(s)).toBe(game.moves[0].fenAfter);
   });

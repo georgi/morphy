@@ -191,7 +191,6 @@ export const useImportStore = create<ImportState>((set) => ({
 
 export interface AnalyzerState {
   game: Game | null;
-  currentPly: number; // scaffolding: branch-point ply, synced from currentNodeId (removed in a later pass)
   nodesById: Record<string, MoveNode>;
   rootId: string;
   currentNodeId: string;
@@ -275,7 +274,6 @@ const INITIAL_TREE: MoveTree = emptyTree(START_FEN);
 
 export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
   game: null,
-  currentPly: 0,
   nodesById: INITIAL_TREE.nodesById,
   rootId: INITIAL_TREE.rootId,
   currentNodeId: INITIAL_TREE.rootId,
@@ -297,7 +295,6 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
       nodesById: tree.nodesById,
       rootId: tree.rootId,
       currentNodeId: tree.rootId,
-      currentPly: 0,
       analysis: game.analysis ?? null,
       evalByPly: {},
       arrowEvalByFen: {},
@@ -310,7 +307,7 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
   gotoNode: (id) => {
     const s = get();
     if (!s.nodesById[id]) return;
-    set({ currentNodeId: id, currentPly: nearestMainlinePly(s.nodesById, id), agentFen: null });
+    set({ currentNodeId: id, agentFen: null });
   },
 
   playMove: (drop) => {
@@ -320,7 +317,6 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
     set({
       nodesById: res.nodesById,
       currentNodeId: res.nodeId,
-      currentPly: nearestMainlinePly(res.nodesById, res.nodeId),
       agentFen: null,
     });
     return true;
@@ -329,21 +325,21 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
   gotoPly: (n) => {
     const s = get();
     const id = mainlineNodeAtPly({ nodesById: s.nodesById, rootId: s.rootId }, n);
-    set({ currentNodeId: id, currentPly: nearestMainlinePly(s.nodesById, id), agentFen: null });
+    set({ currentNodeId: id, agentFen: null });
   },
 
   nextPly: () => {
     const s = get();
     const next = s.nodesById[s.currentNodeId].children[0];
     if (next === undefined) return;
-    set({ currentNodeId: next, currentPly: nearestMainlinePly(s.nodesById, next), agentFen: null });
+    set({ currentNodeId: next, agentFen: null });
   },
 
   prevPly: () => {
     const s = get();
     const parentId = s.nodesById[s.currentNodeId].parentId;
     if (parentId === null) return;
-    set({ currentNodeId: parentId, currentPly: nearestMainlinePly(s.nodesById, parentId), agentFen: null });
+    set({ currentNodeId: parentId, agentFen: null });
   },
 
   flip: () =>
@@ -414,7 +410,7 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
     const s = get();
     if (ply !== undefined) {
       const id = mainlineNodeAtPly({ nodesById: s.nodesById, rootId: s.rootId }, ply);
-      set({ currentNodeId: id, currentPly: nearestMainlinePly(s.nodesById, id), agentFen: null });
+      set({ currentNodeId: id, agentFen: null });
     } else {
       set({ agentFen: fen });
     }
