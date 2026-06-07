@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { useBoardShortcuts } from "@/hooks/useBoardShortcuts";
 import { toast } from "sonner";
 import { Chess } from "chess.js";
 import {
@@ -97,6 +98,11 @@ export function BoardPanel() {
   const orientation = useAnalyzerStore((s) => s.orientation);
   const coach = useAnalyzerStore((s) => s.coach);
   const arrows = useBestMoveArrows();
+  // Eval chips on the arrows are revealed only while the board is hovered.
+  const [hoverBoard, setHoverBoard] = useState(false);
+
+  // ←/→ step, ↑/↓ (Home/End) jump to start/end, f flip, a arrows, m next mistake.
+  useBoardShortcuts();
 
   const options: ChessboardOptions = useMemo(() => {
     const base: ChessboardOptions = {
@@ -152,9 +158,17 @@ export function BoardPanel() {
       {coach.mode !== "idle" && <CoachBanner />}
       <div className="flex min-h-0 flex-1 items-center justify-center gap-3">
         <EvalBar />
-        <div className="relative aspect-square w-full max-w-[560px]">
+        <div
+          className="relative aspect-square w-full max-w-[560px]"
+          onPointerEnter={() => setHoverBoard(true)}
+          onPointerLeave={() => setHoverBoard(false)}
+        >
           <Chessboard options={options} />
-          <BestMoveArrows arrows={arrows} orientation={orientation} />
+          <BestMoveArrows
+            arrows={arrows}
+            orientation={orientation}
+            showEvals={hoverBoard}
+          />
         </div>
       </div>
       <BoardControls />

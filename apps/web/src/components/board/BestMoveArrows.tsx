@@ -28,15 +28,17 @@ const RANK_STYLE: Record<
 const CHIP_BG = "oklch(0.20 0.006 60 / 0.92)";
 
 /** Half-length of the arrowhead along the shaft, in board units. */
-const HEAD_LENGTH = 0.32;
+const HEAD_LENGTH = 0.38;
 /** Half-width of the arrowhead across the shaft, in board units. */
-const HEAD_WIDTH = 0.22;
+const HEAD_WIDTH = 0.27;
 
 interface BestMoveArrowsProps {
   /** Ranked candidate moves to draw (already top-N, rank-ordered). */
   arrows: ArrowSpec[];
   /** Board orientation; flips the coordinate mapping. */
   orientation: Orientation;
+  /** Show the per-arrow eval chips (only while the board is hovered). */
+  showEvals?: boolean;
 }
 
 /**
@@ -45,7 +47,11 @@ interface BestMoveArrowsProps {
  * whole layer fades in (~120ms ease-out) on mount; under `prefers-reduced-motion`
  * it snaps in (no transition, no layout-property animation).
  */
-export function BestMoveArrows({ arrows, orientation }: BestMoveArrowsProps) {
+export function BestMoveArrows({
+  arrows,
+  orientation,
+  showEvals = false,
+}: BestMoveArrowsProps) {
   if (arrows.length === 0) return null;
 
   // Draw weakest first so the best move ends up on top.
@@ -79,19 +85,22 @@ export function BestMoveArrows({ arrows, orientation }: BestMoveArrowsProps) {
           key={`${arrow.from}${arrow.to}`}
           arrow={arrow}
           orientation={orientation}
+          showEval={showEvals}
         />
       ))}
     </svg>
   );
 }
 
-/** A single arrow: shortened shaft + arrowhead + eval chip near the target. */
+/** A single arrow: shortened shaft + arrowhead + (on hover) eval chip near the target. */
 function Arrow({
   arrow,
   orientation,
+  showEval,
 }: {
   arrow: ArrowSpec;
   orientation: Orientation;
+  showEval: boolean;
 }) {
   const style = RANK_STYLE[arrow.rank];
   const s = squareToXY(arrow.from, orientation);
@@ -133,14 +142,16 @@ function Arrow({
         strokeLinecap="round"
       />
       <polygon points={head} fill={style.color} />
-      <EvalChip
-        x={e.x}
-        y={e.y}
-        ux={ux}
-        uy={uy}
-        text={arrow.evalText}
-        color={style.color}
-      />
+      {showEval && (
+        <EvalChip
+          x={e.x}
+          y={e.y}
+          ux={ux}
+          uy={uy}
+          text={arrow.evalText}
+          color={style.color}
+        />
+      )}
     </g>
   );
 }
@@ -171,9 +182,9 @@ function EvalChip({
   const cx = x - ux * 0.34;
   const cy = y - uy * 0.34;
 
-  const fontSize = 0.32;
-  const padX = 0.1;
-  const height = fontSize + 0.12;
+  const fontSize = 0.18;
+  const padX = 0.06;
+  const height = fontSize + 0.08;
   // Approximate monospace advance width (~0.6em) to size the background rect.
   const width = text.length * fontSize * 0.6 + padX * 2;
 
@@ -184,10 +195,10 @@ function EvalChip({
         y={cy - height / 2}
         width={width}
         height={height}
-        rx={0.07}
+        rx={0.05}
         fill={CHIP_BG}
         stroke={color}
-        strokeWidth={0.03}
+        strokeWidth={0.025}
       />
       <text
         x={cx}
