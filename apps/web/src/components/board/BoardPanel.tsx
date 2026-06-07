@@ -78,6 +78,17 @@ function onCoachDrop({
 }
 
 /**
+ * Normal-mode drop: play `from→to` on the current tree node via the store. An
+ * illegal move returns false so react-chessboard snaps the piece back; a legal
+ * one appends/navigates a tree node (variation or existing continuation). All
+ * validation lives in the store's `playMove` (chess.js, auto-queen).
+ */
+function onFreeMoveDrop({ sourceSquare, targetSquare }: PieceDropHandlerArgs): boolean {
+  if (!targetSquare) return false;
+  return useAnalyzerStore.getState().playMove({ from: sourceSquare, to: targetSquare });
+}
+
+/**
  * Left column: vertical eval bar + analysis board + nav controls.
  *
  * Outside an interactive review the board is read-only: it follows the store's
@@ -97,6 +108,7 @@ export function BoardPanel() {
   const fen = useAnalyzerStore(currentFen);
   const orientation = useAnalyzerStore((s) => s.orientation);
   const coach = useAnalyzerStore((s) => s.coach);
+  const agentFen = useAnalyzerStore((s) => s.agentFen);
   const arrows = useBestMoveArrows();
   // Eval chips on the arrows are revealed only while the board is hovered.
   const [hoverBoard, setHoverBoard] = useState(false);
@@ -143,15 +155,18 @@ export function BoardPanel() {
       };
     }
 
-    // Normal review: the SVG overlay owns the best-move arrows, so the library's
-    // `arrows` prop stays empty.
+    // Normal review: the SVG overlay owns the best-move arrows (library `arrows`
+    // stays empty). The board is draggable so the user can branch off any move;
+    // it yields (no dragging) while the agent is driving an off-game position.
+    const draggable = agentFen == null;
     return {
       ...base,
       position: fen,
-      allowDragging: false,
+      allowDragging: draggable,
+      onPieceDrop: draggable ? onFreeMoveDrop : undefined,
       arrows: [],
     };
-  }, [fen, orientation, coach]);
+  }, [fen, orientation, coach, agentFen]);
 
   return (
     <div className="flex h-full flex-col gap-3 p-3">
