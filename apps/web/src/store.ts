@@ -8,6 +8,16 @@ import type {
   LibraryQuery,
   ImportEvent,
 } from "@chess/shared";
+import {
+  type MoveNode,
+  type MoveTree,
+  type DropInput,
+  buildTree,
+  emptyTree,
+  applyMove,
+  mainlineNodeAtPly,
+  nearestMainlinePly,
+} from "@/lib/moveTree";
 
 export const START_FEN =
   "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -181,7 +191,10 @@ export const useImportStore = create<ImportState>((set) => ({
 
 export interface AnalyzerState {
   game: Game | null;
-  currentPly: number;
+  currentPly: number; // scaffolding: branch-point ply, synced from currentNodeId (removed in a later pass)
+  nodesById: Record<string, MoveNode>;
+  rootId: string;
+  currentNodeId: string;
   orientation: Orientation;
   evalByPly: Record<number, EngineEval>;
   /**
@@ -206,6 +219,8 @@ export interface AnalyzerState {
 
   setGame: (game: Game) => void;
   gotoPly: (n: number) => void;
+  gotoNode: (id: string) => void;
+  playMove: (drop: DropInput) => boolean;
   nextPly: () => void;
   prevPly: () => void;
   flip: () => void;
@@ -256,17 +271,14 @@ function writeArrowsEnabled(enabled: boolean): void {
   }
 }
 
-/** Clamp a target ply into the valid range for the active game. */
-function clampPly(game: Game | null, n: number): number {
-  if (!game) return 0;
-  if (n < 0) return 0;
-  if (n > game.moves.length) return game.moves.length;
-  return n;
-}
+const INITIAL_TREE: MoveTree = emptyTree(START_FEN);
 
 export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
   game: null,
   currentPly: 0,
+  nodesById: INITIAL_TREE.nodesById,
+  rootId: INITIAL_TREE.rootId,
+  currentNodeId: INITIAL_TREE.rootId,
   orientation: "white",
   evalByPly: {},
   arrowEvalByFen: {},
@@ -278,9 +290,13 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
   agentFen: null,
   coach: IDLE_COACH,
 
-  setGame: (game) =>
+  setGame: (game) => {
+    const tree = buildTree(game);
     set({
       game,
+      nodesById: tree.nodesById,
+      rootId: tree.rootId,
+      currentNodeId: tree.rootId,
       currentPly: 0,
       analysis: game.analysis ?? null,
       evalByPly: {},
@@ -288,21 +304,47 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
       agentFen: null,
       // A fresh game ends any review in progress.
       coach: IDLE_COACH,
-    }),
+    });
+  },
 
-  gotoPly: (n) => set({ currentPly: clampPly(get().game, n), agentFen: null }),
+  gotoNode: (id) => {
+    const s = get();
+    if (!s.nodesById[id]) return;
+    set({ currentNodeId: id, currentPly: nearestMainlinePly(s.nodesById, id), agentFen: null });
+  },
 
-  nextPly: () =>
+  playMove: (drop) => {
+    const s = get();
+    const res = applyMove(s.nodesById, s.currentNodeId, drop);
+    if (!res) return false;
     set({
-      currentPly: clampPly(get().game, get().currentPly + 1),
+      nodesById: res.nodesById,
+      currentNodeId: res.nodeId,
+      currentPly: nearestMainlinePly(res.nodesById, res.nodeId),
       agentFen: null,
-    }),
+    });
+    return true;
+  },
 
-  prevPly: () =>
-    set({
-      currentPly: clampPly(get().game, get().currentPly - 1),
-      agentFen: null,
-    }),
+  gotoPly: (n) => {
+    const s = get();
+    const id = mainlineNodeAtPly({ nodesById: s.nodesById, rootId: s.rootId }, n);
+    set({ currentNodeId: id, currentPly: nearestMainlinePly(s.nodesById, id), agentFen: null });
+  },
+
+  nextPly: () => {
+    const s = get();
+    const next = s.nodesById[s.currentNodeId].children[0];
+    if (next === undefined) return;
+    set({ currentNodeId: next, currentPly: nearestMainlinePly(s.nodesById, next), agentFen: null });
+  },
+
+  prevPly: () => {
+    const s = get();
+    const parentId = s.nodesById[s.currentNodeId].parentId;
+    if (parentId === null) return;
+    set({ currentNodeId: parentId, currentPly: nearestMainlinePly(s.nodesById, parentId), agentFen: null });
+  },
 
   flip: () =>
     set((s) => ({
@@ -368,13 +410,15 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
 
   endAssistantMessage: () => set({ streaming: false }),
 
-  setBoardFromAgent: (fen, ply) =>
-    set((s) => ({
-      currentPly: ply !== undefined ? clampPly(s.game, ply) : s.currentPly,
-      // When the agent supplies a matching ply we let the board derive its FEN
-      // from the game; otherwise we surface the raw agent FEN directly.
-      agentFen: ply !== undefined ? null : fen,
-    })),
+  setBoardFromAgent: (fen, ply) => {
+    const s = get();
+    if (ply !== undefined) {
+      const id = mainlineNodeAtPly({ nodesById: s.nodesById, rootId: s.rootId }, ply);
+      set({ currentNodeId: id, currentPly: nearestMainlinePly(s.nodesById, id), agentFen: null });
+    } else {
+      set({ agentFen: fen });
+    }
+  },
 
   setCoachQuestion: (question) =>
     set({ coach: { mode: "question", current: question, lastReveal: null } }),
@@ -387,17 +431,21 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
   clearCoach: () => set({ coach: IDLE_COACH }),
 }));
 
+/** The active tree node (always defined — the store seeds an empty-tree root). */
+export function currentNode(state: AnalyzerState): MoveNode {
+  return state.nodesById[state.currentNodeId];
+}
+
 /**
- * Selector: the FEN to render for the current board state.
- * - An agent-pushed FEN (off-game variation) wins when present.
- * - No game loaded → standard start position.
- * - ply 0 → game's starting FEN.
- * - ply n → the FEN after the n-th move.
+ * The FEN to render. An agent-pushed off-game FEN wins; otherwise the active
+ * node's position (the empty-tree root is the standard start position).
  */
 export function currentFen(state: AnalyzerState): string {
   if (state.agentFen) return state.agentFen;
-  const { game, currentPly } = state;
-  if (!game) return START_FEN;
-  if (currentPly > 0) return game.moves[currentPly - 1].fenAfter;
-  return game.startFen;
+  return currentNode(state).fen;
+}
+
+/** Ply of the active node, or — in a variation — its branch-point mainline ply. */
+export function currentMainlinePly(state: AnalyzerState): number {
+  return nearestMainlinePly(state.nodesById, state.currentNodeId);
 }

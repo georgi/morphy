@@ -4,8 +4,11 @@ import {
   useAnalyzerStore,
   useImportStore,
   currentFen,
+  currentNode,
+  currentMainlinePly,
   START_FEN,
 } from "@/store";
+import { emptyTree } from "@/lib/moveTree";
 
 /** A tiny two-move game (1. e4 e5) used across the store tests. */
 function makeGame(): Game {
@@ -51,8 +54,12 @@ function evalAt(cp: number): EngineEval {
 
 /** Reset the singleton store before each test for isolation. */
 beforeEach(() => {
+  const t = emptyTree(START_FEN);
   useAnalyzerStore.setState({
     game: null,
+    nodesById: t.nodesById,
+    rootId: t.rootId,
+    currentNodeId: t.rootId,
     currentPly: 0,
     orientation: "white",
     evalByPly: {},
@@ -128,6 +135,72 @@ describe("navigation", () => {
     expect(useAnalyzerStore.getState().orientation).toBe("black");
     useAnalyzerStore.getState().flip();
     expect(useAnalyzerStore.getState().orientation).toBe("white");
+  });
+});
+
+describe("move tree", () => {
+  it("setGame builds the tree and parks the cursor at the root", () => {
+    const game = makeGame();
+    useAnalyzerStore.getState().setGame(game);
+    const s = useAnalyzerStore.getState();
+    expect(s.currentNodeId).toBe(s.rootId);
+    expect(currentFen(s)).toBe(game.startFen);
+    expect(currentNode(s).mainline).toBe(true);
+  });
+
+  it("playMove at the root opens a variation and moves the cursor onto it", () => {
+    const game = makeGame();
+    useAnalyzerStore.getState().setGame(game);
+    // 1. d4 instead of the mainline 1. e4.
+    const ok = useAnalyzerStore.getState().playMove({ from: "d2", to: "d4" });
+    expect(ok).toBe(true);
+    const s = useAnalyzerStore.getState();
+    expect(currentNode(s).move?.san).toBe("d4");
+    expect(currentNode(s).mainline).toBe(false);
+    expect(currentFen(s)).toBe(currentNode(s).fen);
+    // In the variation the branch-point ply is 0 (root).
+    expect(currentMainlinePly(s)).toBe(0);
+  });
+
+  it("replaying the existing move navigates without duplicating", () => {
+    const game = makeGame();
+    useAnalyzerStore.getState().setGame(game);
+    const before = Object.keys(useAnalyzerStore.getState().nodesById).length;
+    const ok = useAnalyzerStore.getState().playMove({ from: "e2", to: "e4" });
+    expect(ok).toBe(true);
+    const s = useAnalyzerStore.getState();
+    expect(Object.keys(s.nodesById)).toHaveLength(before);
+    expect(currentNode(s).move?.san).toBe("e4");
+    expect(currentMainlinePly(s)).toBe(1);
+  });
+
+  it("illegal playMove is a no-op and returns false", () => {
+    const game = makeGame();
+    useAnalyzerStore.getState().setGame(game);
+    const before = useAnalyzerStore.getState().currentNodeId;
+    const ok = useAnalyzerStore.getState().playMove({ from: "e2", to: "e5" });
+    expect(ok).toBe(false);
+    expect(useAnalyzerStore.getState().currentNodeId).toBe(before);
+  });
+
+  it("gotoNode moves the cursor and clears agentFen", () => {
+    const game = makeGame();
+    useAnalyzerStore.getState().setGame(game);
+    const s0 = useAnalyzerStore.getState();
+    const firstId = s0.nodesById[s0.rootId].children[0];
+    useAnalyzerStore.setState({ agentFen: "junk" });
+    useAnalyzerStore.getState().gotoNode(firstId);
+    const s = useAnalyzerStore.getState();
+    expect(s.currentNodeId).toBe(firstId);
+    expect(s.agentFen).toBeNull();
+    expect(currentMainlinePly(s)).toBe(1);
+  });
+
+  it("currentMainlinePly is the real ply on the mainline", () => {
+    const game = makeGame();
+    useAnalyzerStore.getState().setGame(game);
+    useAnalyzerStore.getState().gotoPly(2);
+    expect(currentMainlinePly(useAnalyzerStore.getState())).toBe(2);
   });
 });
 
