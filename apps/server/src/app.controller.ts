@@ -5,7 +5,7 @@ import { Controller, Get } from '@nestjs/common';
  *
  * The JSON API lives under the global `api` prefix (see main.ts). The root
  * `GET /` is excluded from that prefix so that opening the server in a browser
- * returns a helpful pointer instead of a bare 404 — the chess analyzer UI is
+ * returns a helpful pointer instead of a bare 404 — the Morphy UI is
  * served separately by the Vite dev server, not by this process.
  */
 @Controller()
@@ -13,12 +13,12 @@ export class AppController {
   @Get()
   root() {
     return {
-      name: 'chess-analyzer API',
+      name: 'Morphy API',
       status: 'ok',
       api: '/api',
       web: 'http://localhost:5173',
       hint:
-        'This port serves the JSON API under /api. The chess analyzer UI runs ' +
+        'This port serves the JSON API under /api. The Morphy UI runs ' +
         'on the Vite dev server — open http://localhost:5173 (both are started ' +
         'by `pnpm dev`).',
       endpoints: [

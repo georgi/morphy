@@ -19,12 +19,12 @@ export const SCHEMA_VERSION = 1;
  * Resolve the on-disk database path from the environment.
  *  - `CHESS_DB_PATH` wins when set.
  *  - tests (`NODE_ENV==='test'`) default to an in-memory DB.
- *  - otherwise `~/.chess-analyzer/library.db`.
+ *  - otherwise `~/.morphy/library.db`.
  */
 export function resolveDbPath(): string {
   if (process.env.CHESS_DB_PATH) return process.env.CHESS_DB_PATH;
   if (process.env.NODE_ENV === 'test') return ':memory:';
-  return join(homedir(), '.chess-analyzer', 'library.db');
+  return join(homedir(), '.morphy', 'library.db');
 }
 
 /**

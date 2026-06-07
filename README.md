@@ -13,7 +13,7 @@ and the agent.
 ## Architecture
 
 ```
-chess-analyzer/                 pnpm workspace
+morphy/                         pnpm workspace
 ├─ packages/shared/             @chess/shared — types imported by BOTH apps
 ├─ apps/server/                 NestJS API + engine + agent
 └─ apps/web/                    Vite + React 19 SPA

@@ -11,7 +11,7 @@ export type Theme = "light" | "dark" | "system";
 export type ResolvedTheme = "light" | "dark";
 
 /** localStorage key — must match the inline no-flash script in index.html. */
-export const THEME_STORAGE_KEY = "chess-analyzer-theme";
+export const THEME_STORAGE_KEY = "morphy-theme";
 
 interface ThemeContextValue {
   /** The user's choice, including "system". */

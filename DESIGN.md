@@ -1,5 +1,5 @@
 ---
-name: Chess Analyzer
+name: Morphy
 description: A lamplit study for understanding your chess, warm and lucid, never gamified.
 colors:
   # Canonical values are the DARK theme (primary). Light-theme variants live in
@@ -125,7 +125,7 @@ components:
     padding: "12px 16px"
 ---
 
-# Design System: Chess Analyzer
+# Design System: Morphy
 
 ## 1. Overview
 

@@ -119,10 +119,10 @@ describe('database', () => {
       expect(resolveDbPath()).toBe(':memory:');
     });
 
-    it('defaults to ~/.chess-analyzer/library.db otherwise', () => {
+    it('defaults to ~/.morphy/library.db otherwise', () => {
       delete process.env.CHESS_DB_PATH;
       process.env.NODE_ENV = 'production';
-      expect(resolveDbPath()).toMatch(/\.chess-analyzer\/library\.db$/);
+      expect(resolveDbPath()).toMatch(/\.morphy\/library\.db$/);
     });
   });
 });

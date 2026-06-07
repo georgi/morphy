@@ -5,7 +5,7 @@ import { fetchWithRetry, globalFetch, type FetchFn } from './http';
 
 /** Chess.com's public API requires a descriptive, non-empty User-Agent. */
 const USER_AGENT =
-  'chess-analyzer/1.0 (https://github.com/chess-analyzer; bulk PGN import)';
+  'morphy/1.0 (https://github.com/georgi/morphy; bulk PGN import)';
 
 /** Shape of a monthly archive payload from chess.com's public API. */
 interface ChessComArchive {
