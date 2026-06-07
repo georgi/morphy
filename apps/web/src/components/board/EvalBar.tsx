@@ -1,4 +1,4 @@
-import { useAnalyzerStore, currentFen } from "@/store";
+import { useAnalyzerStore, currentFen, currentNode, currentMainlinePly } from "@/store";
 import { winProbability, formatScore } from "@/lib/eval";
 
 /**
@@ -17,10 +17,14 @@ import { winProbability, formatScore } from "@/lib/eval";
  * best-move arrows, so the bar and the #1 arrow always agree.
  */
 export function EvalBar() {
-  const currentPly = useAnalyzerStore((s) => s.currentPly);
-  const evaluation = useAnalyzerStore(
-    (s) => s.evalByPly[s.currentPly] ?? s.arrowEvalByFen[currentFen(s)],
-  );
+  const currentPly = useAnalyzerStore(currentMainlinePly);
+  const evaluation = useAnalyzerStore((s) => {
+    const node = currentNode(s);
+    // A mainline node may carry a full-scan eval keyed by its ply (root = 0);
+    // a variation node never does, so it always falls through to the FEN cache.
+    const mainEval = node.mainline ? s.evalByPly[currentMainlinePly(s)] : undefined;
+    return mainEval ?? s.arrowEvalByFen[currentFen(s)];
+  });
   const line = evaluation?.lines[0];
 
   const cp = line?.scoreCp ?? null;
