@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { useBoardShortcuts } from "@/hooks/useBoardShortcuts";
 import { toast } from "sonner";
 import { Chess } from "chess.js";
@@ -8,7 +8,7 @@ import {
   type Arrow,
   type PieceDropHandlerArgs,
 } from "react-chessboard";
-import { useAnalyzerStore, currentFen } from "@/store";
+import { useAnalyzerStore, currentFen, currentNode } from "@/store";
 import { EvalBar } from "@/components/board/EvalBar";
 import { BoardControls } from "@/components/board/BoardControls";
 import { BestMoveArrows } from "@/components/board/BestMoveArrows";
@@ -18,6 +18,22 @@ import * as api from "@/lib/api";
 
 /** Ember accent for the coach-reveal arrow (DESIGN.md, rank-1 best-move color). */
 const EMBER = "oklch(0.63 0.14 48)";
+
+/**
+ * Current-move highlight: the square the piece came from is a deep/dark yellow,
+ * the square it landed on a bright yellow — so the move just made (or navigated
+ * to) always reads at a glance, even after the slide animation settles.
+ */
+const MOVE_FROM_STYLE: CSSProperties = { backgroundColor: "oklch(0.66 0.13 88)" };
+const MOVE_TO_STYLE: CSSProperties = { backgroundColor: "oklch(0.90 0.18 102)" };
+
+/** Per-square styles for the current move's from/to, or undefined when there is none. */
+function moveSquareStyles(
+  move: { from: string; to: string } | null,
+): Record<string, CSSProperties> | undefined {
+  if (!move) return undefined;
+  return { [move.from]: MOVE_FROM_STYLE, [move.to]: MOVE_TO_STYLE };
+}
 
 /**
  * SAN best move (e.g. "Nf3", "exd8=Q") played from `fen` → an ember arrow, or
@@ -113,6 +129,17 @@ export function BoardPanel() {
   // Eval chips on the arrows are revealed only while the board is hovered.
   const [hoverBoard, setHoverBoard] = useState(false);
 
+  // The current move's UCI (a stable primitive — selecting an object here would
+  // churn the store subscription). No highlight at the root or off-tree (agent).
+  const moveUci = useAnalyzerStore((s) =>
+    s.agentFen ? null : (currentNode(s).move?.uci ?? null),
+  );
+  const lastMove = useMemo(
+    () =>
+      moveUci ? { from: moveUci.slice(0, 2), to: moveUci.slice(2, 4) } : null,
+    [moveUci],
+  );
+
   // ←/→ step, ↑/↓ (Home/End) jump to start/end, f flip, a arrows, m next mistake.
   useBoardShortcuts();
 
@@ -165,25 +192,38 @@ export function BoardPanel() {
       allowDragging: draggable,
       onPieceDrop: draggable ? onFreeMoveDrop : undefined,
       arrows: [],
+      // Yellow from/to highlight so the current move always reads (the piece
+      // slides in via showAnimations, then the squares keep it marked).
+      squareStyles: moveSquareStyles(lastMove),
     };
-  }, [fen, orientation, coach, agentFen]);
+  }, [fen, orientation, coach, agentFen, lastMove]);
 
   return (
     <div className="flex h-full flex-col gap-3 p-3">
       {coach.mode !== "idle" && <CoachBanner />}
-      <div className="flex min-h-0 flex-1 items-center justify-center gap-3">
-        <EvalBar />
+      <div className="flex min-h-0 flex-1 items-center justify-center [container-type:size]">
+        {/* The board fills the pane: it's sized to the largest square that fits
+            in BOTH axes — height by the pane height (100cqh), width by the pane
+            width minus the eval bar (w-6) and its gap (gap-3) = 2.25rem. So the
+            board grows with the panel instead of stopping at a fixed cap, while
+            never overflowing the pane vertically. */}
         <div
-          className="relative aspect-square w-full max-w-[560px]"
-          onPointerEnter={() => setHoverBoard(true)}
-          onPointerLeave={() => setHoverBoard(false)}
+          className="flex items-stretch gap-3"
+          style={{ height: "min(100cqh, 100cqw - 2.25rem)" }}
         >
-          <Chessboard options={options} />
-          <BestMoveArrows
-            arrows={arrows}
-            orientation={orientation}
-            showEvals={hoverBoard}
-          />
+          <EvalBar />
+          <div
+            className="relative aspect-square h-full shrink-0"
+            onPointerEnter={() => setHoverBoard(true)}
+            onPointerLeave={() => setHoverBoard(false)}
+          >
+            <Chessboard options={options} />
+            <BestMoveArrows
+              arrows={arrows}
+              orientation={orientation}
+              showEvals={hoverBoard}
+            />
+          </div>
         </div>
       </div>
       <BoardControls />
