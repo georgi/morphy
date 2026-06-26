@@ -1,15 +1,5 @@
 import type { AgentEvent, Game, Move } from '@chess/shared';
 
-// The Pi Agent SDK is ESM-only and its native dynamic import can't load under
-// Jest's CJS VM (the reason agent tools have no spec yet). `defineTool` only
-// shapes a definition object — stub the loader so it returns the definition
-// verbatim, leaving each tool's real `execute` (the code under test) intact.
-jest.mock('./pi-loader', () => ({
-  loadPiSdk: jest.fn(async () => ({
-    defineTool: (def: unknown) => def,
-  })),
-}));
-
 import { openDatabase, type Db } from '../persistence/database';
 import { GamesRepository } from '../persistence/games.repository';
 import { CollectionsRepository } from '../persistence/collections.repository';
@@ -45,13 +35,13 @@ function makeGame(id: string, headers: Record<string, string>): Game {
 }
 
 /**
- * A handle on a built tool: the SDK's `defineTool` returns objects with
- * `name`/`execute`, which is all these thin library tools need at the unit level.
+ * A handle on a built tool: `defineAgentTool` returns objects with `name`/`execute`,
+ * which is all these thin library tools need at the unit level. `execute` takes
+ * only the parsed params (no SDK tool-call id).
  */
 interface BuiltTool {
   name: string;
   execute: (
-    id: string,
     params: Record<string, unknown>,
   ) => Promise<{
     content: { type: 'text'; text: string }[];
@@ -148,7 +138,7 @@ describe('Library agent tools', () => {
 
   describe('search_library', () => {
     it('returns all games as summaries with the total', async () => {
-      const res = await built.search_library.execute('1', {});
+      const res = await built.search_library.execute({});
       expect(res.details.total).toBe(2);
       const summaries = res.details.games as { id: string }[];
       expect(summaries.map((g) => g.id).sort()).toEqual(['f', 'm']);
@@ -156,14 +146,14 @@ describe('Library agent tools', () => {
     });
 
     it('filters by free-text q (delegating to LibraryService)', async () => {
-      const res = await built.search_library.execute('1', { q: 'ruy' });
+      const res = await built.search_library.execute({ q: 'ruy' });
       const summaries = res.details.games as { id: string }[];
       expect(summaries.map((g) => g.id)).toEqual(['f']);
       expect(res.details.total).toBe(1);
     });
 
     it('filters by source and result', async () => {
-      const res = await built.search_library.execute('1', {
+      const res = await built.search_library.execute({
         source: 'lichess',
         result: '1-0',
       });
@@ -172,7 +162,7 @@ describe('Library agent tools', () => {
     });
 
     it('reports an empty result clearly', async () => {
-      const res = await built.search_library.execute('1', { q: 'no-such-game' });
+      const res = await built.search_library.execute({ q: 'no-such-game' });
       expect(res.details.total).toBe(0);
       expect(res.content[0].text).toMatch(/no games match/i);
     });
@@ -180,7 +170,7 @@ describe('Library agent tools', () => {
 
   describe('open_game', () => {
     it('loads the game and emits a board_update at ply 0', async () => {
-      const res = await built.open_game.execute('1', { id: 'm' });
+      const res = await built.open_game.execute({ id: 'm' });
       expect(res.details.gameId).toBe('m');
       expect(res.content[0].text).toContain('Magnus Carlsen vs Hikaru Nakamura');
 
@@ -194,7 +184,7 @@ describe('Library agent tools', () => {
     });
 
     it('errors (no board_update) for an unknown id', async () => {
-      const res = await built.open_game.execute('1', { id: 'nope' });
+      const res = await built.open_game.execute({ id: 'nope' });
       expect(res.details.error).toMatch(/not found/i);
       expect(emitted).toHaveLength(0);
     });
@@ -202,7 +192,7 @@ describe('Library agent tools', () => {
 
   describe('list_collections', () => {
     it('lists collections with their game counts', async () => {
-      const res = await built.list_collections.execute('1', {});
+      const res = await built.list_collections.execute({});
       const cols = res.details.collections as { name: string; gameCount: number }[];
       expect(cols).toHaveLength(1);
       expect(cols[0]).toMatchObject({ name: 'Sicilians', gameCount: 1 });

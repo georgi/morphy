@@ -1,18 +1,36 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Observable, Subject } from 'rxjs';
 import { map } from 'rxjs/operators';
 import type { MessageEvent } from '@nestjs/common';
-import type { AgentSession } from '@earendil-works/pi-coding-agent';
-import type { AgentEvent, AgentMessageRequest, Game } from '@chess/shared';
+import type {
+  AgentEvent,
+  AgentMessageRequest,
+  Game,
+  ModelInfo,
+  SessionSummary,
+  TranscriptMessage,
+} from '@chess/shared';
 import { ChessService } from '../chess/chess.service';
 import { GameStore } from '../chess/game.store';
 import { ChessToolsService, type ToolSessionContext } from './chess-tools.service';
-import { loadPiSdk } from './pi-loader';
+import {
+  AGENT_HARNESS,
+  type AgentHarness,
+  type AgentRunner,
+} from './harness/agent-harness';
+
+/** Options threaded from the SSE query string into session creation. */
+interface StreamOptions {
+  /** Chosen model id; undefined uses the backend default. */
+  model?: string;
+  /** SDK-native session id to resume instead of creating a fresh session. */
+  resume?: string;
+}
 
 /** Per-chat-session state held in memory for the lifetime of the process. */
 interface SessionState {
-  /** The live Pi agent session. */
-  piSession: AgentSession;
+  /** The live agent runner (backend-neutral handle to the SDK session). */
+  runner: AgentRunner;
   /** Fan-out channel: every translated AgentEvent is pushed here and streamed via SSE. */
   subject: Subject<AgentEvent>;
   /** The game/ply the user is currently viewing, updated on each posted message. */
@@ -40,12 +58,13 @@ Rules:
 - You also have analyze_position, evaluate_move, explain_variation, analyze_game, get_position, list_legal_moves, material_balance, identify_opening, goto_move, load_pgn and load_fen for follow-up questions outside the structured review.`;
 
 /**
- * Manages Pi agent chat sessions and bridges them to SSE.
+ * Manages agent chat sessions and bridges them to SSE.
  *
- * Each chat session has: a Pi {@link AgentSession} (with the chess tools bound to
- * that session's stream), an RxJS Subject the SSE endpoint reads from, and the
- * user's current game/ply context. Pi session events are translated into the
- * shared {@link AgentEvent} union and pushed onto the Subject.
+ * Each chat session has: an {@link AgentRunner} (a backend-neutral handle to the
+ * harness session, with the chess tools bound to that session's stream), an RxJS
+ * Subject the SSE endpoint reads from, and the user's current game/ply context.
+ * The harness translates SDK events into the shared {@link AgentEvent} union and
+ * pushes them onto the Subject; `done`/`error` stay app-level here.
  */
 @Injectable()
 export class AgentService {
@@ -54,7 +73,7 @@ export class AgentService {
   /** Tracks in-flight session creation so concurrent calls share one creation. */
   private readonly creating = new Map<string, Promise<SessionState>>();
   /**
-   * Subjects created by getStream before the Pi session finishes initializing.
+   * Subjects created by getStream before the agent session finishes initializing.
    * createSession reuses the one stored here so the SSE Observable attached by
    * getStream receives events from the very first turn.
    */
@@ -64,18 +83,38 @@ export class AgentService {
     private readonly tools: ChessToolsService,
     private readonly chess: ChessService,
     private readonly store: GameStore,
+    @Inject(AGENT_HARNESS) private readonly harness: AgentHarness,
   ) {}
 
+  /** List the models the active backend offers, for the model picker. */
+  listModels(): Promise<ModelInfo[]> {
+    return this.harness.listModels();
+  }
+
+  /** List the active backend's stored sessions, for the continue UI. */
+  listSessions(): Promise<SessionSummary[]> {
+    return this.harness.listSessions();
+  }
+
+  /** Replay a stored session's user/assistant text turns, for the continue UI. */
+  getSessionMessages(id: string): Promise<TranscriptMessage[]> {
+    return this.harness.getSessionMessages(id);
+  }
+
   /**
-   * SSE source for a chat session. Lazily creates the Pi session (and its tools
+   * SSE source for a chat session. Lazily creates the agent session (and its tools
    * bound to this session's Subject) on first access, then maps every AgentEvent
-   * to the `{ data }` shape NestJS @Sse expects.
+   * to the `{ data }` shape NestJS @Sse expects. `opts.model`/`opts.resume` thread
+   * into session creation (only honored on the first, creating access).
    */
-  getStream(sessionId: string): Observable<MessageEvent> {
+  getStream(
+    sessionId: string,
+    opts?: StreamOptions,
+  ): Observable<MessageEvent> {
     const subject = this.ensureSubject(sessionId);
     // Kick off session creation eagerly so tools/prompt are ready by the time a
     // message is posted. Errors are surfaced onto the stream as an error event.
-    void this.ensureSession(sessionId).catch((err) => {
+    void this.ensureSession(sessionId, opts).catch((err) => {
       subject.next({
         type: 'error',
         message: err instanceof Error ? err.message : String(err),
@@ -88,7 +127,7 @@ export class AgentService {
 
   /**
    * Handle a posted user message: record the user's current game/ply context,
-   * build a context-enriched prompt, and run it through the Pi session. The
+   * build a context-enriched prompt, and run it through the agent session. The
    * streamed answer, tool activity, and board updates flow out via the Subject
    * (see {@link getStream}). Resolves once the agent turn completes.
    */
@@ -101,15 +140,10 @@ export class AgentService {
 
     const prompt = this.buildPrompt(body);
     try {
-      await state.piSession.prompt(prompt);
-      // The turn resolved — signal completion. (Pi has no dedicated done event;
-      // prompt() resolving is the turn-completion signal.)
-      const errorMessage = state.piSession.state.errorMessage;
-      if (errorMessage) {
-        state.subject.next({ type: 'error', message: errorMessage });
-      } else {
-        state.subject.next({ type: 'done' });
-      }
+      // The harness resolves on turn completion and throws on a failed turn (the
+      // backend's error surfacing lives behind the interface now).
+      await state.runner.prompt(prompt);
+      state.subject.next({ type: 'done' });
     } catch (err) {
       state.subject.next({
         type: 'error',
@@ -137,13 +171,16 @@ export class AgentService {
   }
 
   /** Get-or-create the session state, deduplicating concurrent creation. */
-  private ensureSession(sessionId: string): Promise<SessionState> {
+  private ensureSession(
+    sessionId: string,
+    opts?: StreamOptions,
+  ): Promise<SessionState> {
     const existing = this.sessions.get(sessionId);
     if (existing) return Promise.resolve(existing);
     const pending = this.creating.get(sessionId);
     if (pending) return pending;
 
-    const creation = this.createSession(sessionId)
+    const creation = this.createSession(sessionId, opts)
       .then((state) => {
         this.sessions.set(sessionId, state);
         this.creating.delete(sessionId);
@@ -158,11 +195,15 @@ export class AgentService {
   }
 
   /**
-   * Build a fresh Pi session for `sessionId`: a Subject (shared with any SSE
+   * Build a fresh agent session for `sessionId`: a Subject (shared with any SSE
    * Observable already attached), the chess tools bound to that Subject, and a
-   * Pi session restricted to those custom tools with a coaching system prompt.
+   * harness runner restricted to those tools with the coaching system prompt.
+   * Resumes an existing SDK-native session when `opts.resume` is set.
    */
-  private async createSession(sessionId: string): Promise<SessionState> {
+  private async createSession(
+    sessionId: string,
+    opts?: StreamOptions,
+  ): Promise<SessionState> {
     const subject =
       this.pendingSubjects.get(sessionId) ?? new Subject<AgentEvent>();
     this.pendingSubjects.delete(sessionId);
@@ -173,79 +214,19 @@ export class AgentService {
       getContext: () => context,
     };
 
-    const { createAgentSession, SessionManager, DefaultResourceLoader, getAgentDir } =
-      await loadPiSdk();
+    const tools = await this.tools.buildToolsForSession(toolCtx);
 
-    const customTools = await this.tools.buildToolsForSession(toolCtx);
-
-    // Replace the system prompt with our coaching prompt and suppress all
-    // project-local discovery (extensions/skills/AGENTS.md): this is a server,
-    // there is no codebase context to load.
-    const resourceLoader = new DefaultResourceLoader({
-      cwd: process.cwd(),
-      agentDir: getAgentDir(),
-      noExtensions: true,
-      noSkills: true,
-      noPromptTemplates: true,
-      noContextFiles: true,
+    const cfg = {
       systemPrompt: SYSTEM_PROMPT,
-      appendSystemPrompt: [],
-      systemPromptOverride: () => SYSTEM_PROMPT,
-      appendSystemPromptOverride: () => [],
-    });
-    await resourceLoader.reload();
+      tools,
+      emit: (event: AgentEvent) => subject.next(event),
+      model: opts?.model,
+    };
+    const runner = opts?.resume
+      ? await this.harness.resumeSession(opts.resume, cfg)
+      : await this.harness.createSession(cfg);
 
-    const { session } = await createAgentSession({
-      // Only our chess tools — no filesystem/bash access.
-      noTools: 'builtin',
-      customTools,
-      tools: customTools.map((tool) => tool.name),
-      resourceLoader,
-      sessionManager: SessionManager.inMemory(),
-    });
-
-    const state: SessionState = { piSession: session, subject, context };
-    this.subscribeToSession(state);
-    return state;
-  }
-
-  /**
-   * Translate Pi session events into the shared AgentEvent union and push them
-   * onto the session's Subject. `board_update` events are emitted directly by the
-   * tools (see ChessToolsService), so they are not produced here.
-   */
-  private subscribeToSession(state: SessionState): void {
-    const { piSession, subject } = state;
-    piSession.subscribe((event) => {
-      switch (event.type) {
-        case 'message_update': {
-          const inner = event.assistantMessageEvent;
-          if (inner.type === 'text_delta') {
-            subject.next({ type: 'text_delta', delta: inner.delta });
-          }
-          break;
-        }
-        case 'tool_execution_start': {
-          subject.next({
-            type: 'tool_start',
-            tool: event.toolName,
-            args: event.args,
-          });
-          break;
-        }
-        case 'tool_execution_end': {
-          subject.next({
-            type: 'tool_end',
-            tool: event.toolName,
-            ok: !event.isError,
-            summary: this.summarizeToolResult(event.result),
-          });
-          break;
-        }
-        default:
-          break;
-      }
-    });
+    return { runner, subject, context };
   }
 
   // ── prompt building ──────────────────────────────────────────────────────
@@ -289,23 +270,5 @@ export class AgentService {
         return `${num}${m.san}`;
       })
       .join(' ');
-  }
-
-  /** Best-effort one-line summary of a tool result for the activity trail. */
-  private summarizeToolResult(result: unknown): string | undefined {
-    if (!result || typeof result !== 'object') return undefined;
-    const content = (result as { content?: unknown }).content;
-    if (!Array.isArray(content)) return undefined;
-    const first = content.find(
-      (part): part is { type: 'text'; text: string } =>
-        !!part &&
-        typeof part === 'object' &&
-        (part as { type?: unknown }).type === 'text' &&
-        typeof (part as { text?: unknown }).text === 'string',
-    );
-    if (!first) return undefined;
-    const text = first.text.trim();
-    const firstLine = text.split('\n', 1)[0];
-    return firstLine.length > 160 ? `${firstLine.slice(0, 160)}…` : firstLine;
   }
 }

@@ -263,13 +263,15 @@ export class KeyMomentsService {
    * discovery; this is a server with no codebase context), minus the custom tools.
    */
   private async createOneShotSession() {
-    const { loadPiSdk } = await import("../agent/pi-loader");
+    const { loadEsm } = await import("../agent/harness/esm-loader");
     const {
       createAgentSession,
       SessionManager,
       DefaultResourceLoader,
       getAgentDir,
-    } = await loadPiSdk();
+    } = await loadEsm<typeof import("@earendil-works/pi-coding-agent")>(
+      "@earendil-works/pi-coding-agent",
+    );
 
     const resourceLoader = new DefaultResourceLoader({
       cwd: process.cwd(),

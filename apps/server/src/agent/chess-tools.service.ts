@@ -1,8 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Type } from '@sinclair/typebox';
-import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type {
-  AgentEvent,
   EngineEval,
   GameSummary,
   ImportSource,
@@ -14,30 +12,23 @@ import { GameStore } from '../chess/game.store';
 import { AnalysisService } from '../analysis/analysis.service';
 import { CoachService } from '../analysis/coach.service';
 import { LibraryService } from '../library/library.service';
-import { loadPiSdk } from './pi-loader';
+import { defineAgentTool, type AgentTool } from './harness/agent-tool';
+import type { ToolSessionContext } from './harness/agent-tool';
 
-/**
- * Context handed to {@link ChessToolsService.buildToolsForSession}. The tools use
- * it to (a) push UI-affecting events onto the session's SSE stream and (b) read
- * the active game/ply the user is looking at, so tools that don't take an
- * explicit game can default to the current one.
- */
-export interface ToolSessionContext {
-  /** Emit an AgentEvent onto this session's stream (e.g. a board_update). */
-  emit: (event: AgentEvent) => void;
-  /** The game/ply the user is currently viewing, if any. */
-  getContext: () => { gameId?: string; ply?: number };
-}
+// Re-export so existing imports (`import type { ToolSessionContext } from
+// './chess-tools.service'`) keep working after the type moved into the harness.
+export type { ToolSessionContext } from './harness/agent-tool';
 
 /** Cap on tool text returned to the model, to avoid blowing up the context window. */
 const MAX_TOOL_TEXT = 8_000;
 
 /**
- * Builds the Pi Agent SDK tool registry. Every tool is a thin wrapper that
- * delegates to ChessService / AnalysisService / GameStore — the same services
- * the REST API uses — and returns the SDK's text-content result. Tools that move
- * the board the user sees (`load_pgn`, `load_fen`, `goto_move`) additionally emit
- * a `board_update` event so the client follows the agent.
+ * Builds the backend-neutral agent tool registry. Every tool is a thin wrapper
+ * that delegates to ChessService / AnalysisService / GameStore — the same services
+ * the REST API uses — and returns a text-content result. Tools that move the board
+ * the user sees (`load_pgn`, `load_fen`, `goto_move`) additionally emit a
+ * `board_update` event so the client follows the agent. The active {@link
+ * AgentHarness} wraps these tools onto its own SDK's tool shape.
  */
 @Injectable()
 export class ChessToolsService {
@@ -50,14 +41,13 @@ export class ChessToolsService {
   ) {}
 
   /**
-   * Build the full tool set bound to a single chat session's context. Async
-   * because `defineTool` lives in the ESM-only Pi SDK, loaded via dynamic import.
+   * Build the full tool set bound to a single chat session's context. Async to
+   * keep the signature stable for callers, though tool construction is now
+   * synchronous (no SDK import — the harness wraps these neutral tools).
    */
   async buildToolsForSession(
     ctx: ToolSessionContext,
-  ): Promise<ToolDefinition[]> {
-    const { defineTool } = await loadPiSdk();
-
+  ): Promise<AgentTool[]> {
     // Per-session interactive-review cursor, shared by the three coaching tools
     // below. `buildToolsForSession` runs once per chat session, so this closure
     // variable carries the review state across the session's tool calls without a
@@ -69,7 +59,7 @@ export class ChessToolsService {
     } | null = null;
 
     // ── load_pgn ───────────────────────────────────────────────────────────
-    const loadPgn = defineTool({
+    const loadPgn = defineAgentTool({
       name: 'load_pgn',
       label: 'Load PGN',
       description:
@@ -79,7 +69,7 @@ export class ChessToolsService {
       parameters: Type.Object({
         pgn: Type.String({ description: 'The full PGN text of the game.' }),
       }),
-      execute: async (_id, params) => {
+      execute: async (params) => {
         const game = this.store.create(this.chess.importPgn(params.pgn));
         ctx.emit({
           type: 'board_update',
@@ -108,7 +98,7 @@ export class ChessToolsService {
     });
 
     // ── load_fen ───────────────────────────────────────────────────────────
-    const loadFen = defineTool({
+    const loadFen = defineAgentTool({
       name: 'load_fen',
       label: 'Load FEN',
       description:
@@ -117,7 +107,7 @@ export class ChessToolsService {
       parameters: Type.Object({
         fen: Type.String({ description: 'A valid FEN position string.' }),
       }),
-      execute: async (_id, params) => {
+      execute: async (params) => {
         const game = this.store.create(this.chess.importFen(params.fen));
         ctx.emit({
           type: 'board_update',
@@ -133,7 +123,7 @@ export class ChessToolsService {
     });
 
     // ── get_position ─────────────────────────────────────────────────────────
-    const getPosition = defineTool({
+    const getPosition = defineAgentTool({
       name: 'get_position',
       label: 'Get Position',
       description:
@@ -154,7 +144,7 @@ export class ChessToolsService {
           }),
         ),
       }),
-      execute: async (_id, params) => {
+      execute: async (params) => {
         const gameId = params.gameId ?? ctx.getContext().gameId;
         const game = gameId ? this.store.get(gameId) : undefined;
         if (!game) {
@@ -174,14 +164,14 @@ export class ChessToolsService {
     });
 
     // ── list_legal_moves ─────────────────────────────────────────────────────
-    const listLegalMoves = defineTool({
+    const listLegalMoves = defineAgentTool({
       name: 'list_legal_moves',
       label: 'List Legal Moves',
       description: 'List all legal moves (in SAN) from a position given by FEN.',
       parameters: Type.Object({
         fen: Type.String({ description: 'The position FEN.' }),
       }),
-      execute: async (_id, params) => {
+      execute: async (params) => {
         const moves = this.chess.legalMoves(params.fen);
         return this.textResult(
           `${moves.length} legal moves: ${moves.join(', ')}`,
@@ -191,7 +181,7 @@ export class ChessToolsService {
     });
 
     // ── material_balance ─────────────────────────────────────────────────────
-    const materialBalance = defineTool({
+    const materialBalance = defineAgentTool({
       name: 'material_balance',
       label: 'Material Balance',
       description:
@@ -200,7 +190,7 @@ export class ChessToolsService {
       parameters: Type.Object({
         fen: Type.String({ description: 'The position FEN.' }),
       }),
-      execute: async (_id, params) => {
+      execute: async (params) => {
         const balance = this.chess.materialBalance(params.fen);
         const lead =
           balance.diff === 0
@@ -214,7 +204,7 @@ export class ChessToolsService {
     });
 
     // ── goto_move ────────────────────────────────────────────────────────────
-    const gotoMove = defineTool({
+    const gotoMove = defineAgentTool({
       name: 'goto_move',
       label: 'Go To Move',
       description:
@@ -229,7 +219,7 @@ export class ChessToolsService {
         ),
         ply: Type.Number({ description: 'Half-move index to navigate to.' }),
       }),
-      execute: async (_id, params) => {
+      execute: async (params) => {
         const gameId = params.gameId ?? ctx.getContext().gameId;
         const game = gameId ? this.store.get(gameId) : undefined;
         if (!game) {
@@ -250,7 +240,7 @@ export class ChessToolsService {
     });
 
     // ── analyze_position ─────────────────────────────────────────────────────
-    const analyzePosition = defineTool({
+    const analyzePosition = defineAgentTool({
       name: 'analyze_position',
       label: 'Analyze Position',
       description:
@@ -265,7 +255,7 @@ export class ChessToolsService {
           Type.Number({ description: 'Number of top lines to return (default 1).' }),
         ),
       }),
-      execute: async (_id, params) => {
+      execute: async (params) => {
         const evaluation = await this.analysis.analyzePosition(params.fen, {
           depth: params.depth,
           multipv: params.multipv,
@@ -275,7 +265,7 @@ export class ChessToolsService {
     });
 
     // ── evaluate_move ────────────────────────────────────────────────────────
-    const evaluateMove = defineTool({
+    const evaluateMove = defineAgentTool({
       name: 'evaluate_move',
       label: 'Evaluate Move',
       description:
@@ -286,7 +276,7 @@ export class ChessToolsService {
         fen: Type.String({ description: 'The position before the move (FEN).' }),
         san: Type.String({ description: 'The played move in SAN, e.g. "Nf3".' }),
       }),
-      execute: async (_id, params) => {
+      execute: async (params) => {
         const result = await this.analysis.evaluateMove(params.fen, params.san);
         const bestLine = result.bestLine.length
           ? ` Best line: ${result.bestLine.join(' ')}.`
@@ -300,7 +290,7 @@ export class ChessToolsService {
     });
 
     // ── analyze_game ─────────────────────────────────────────────────────────
-    const analyzeGame = defineTool({
+    const analyzeGame = defineAgentTool({
       name: 'analyze_game',
       label: 'Analyze Game',
       description:
@@ -314,7 +304,7 @@ export class ChessToolsService {
           }),
         ),
       }),
-      execute: async (_id, params) => {
+      execute: async (params) => {
         const gameId = params.gameId ?? ctx.getContext().gameId;
         if (!gameId) {
           return this.errorResult('No game to analyze. Load a game first.');
@@ -340,7 +330,7 @@ export class ChessToolsService {
     });
 
     // ── explain_variation ────────────────────────────────────────────────────
-    const explainVariation = defineTool({
+    const explainVariation = defineAgentTool({
       name: 'explain_variation',
       label: 'Explain Variation',
       description:
@@ -352,7 +342,7 @@ export class ChessToolsService {
           description: 'The variation as an ordered list of SAN moves.',
         }),
       }),
-      execute: async (_id, params) => {
+      execute: async (params) => {
         const steps = await this.analysis.explainVariation(
           params.fen,
           params.line,
@@ -368,7 +358,7 @@ export class ChessToolsService {
     });
 
     // ── identify_opening ─────────────────────────────────────────────────────
-    const identifyOpening = defineTool({
+    const identifyOpening = defineAgentTool({
       name: 'identify_opening',
       label: 'Identify Opening',
       description:
@@ -387,7 +377,7 @@ export class ChessToolsService {
           }),
         ),
       }),
-      execute: async (_id, params) => {
+      execute: async (params) => {
         let opening: { eco?: string; name?: string };
         const gameId = params.gameId ?? (params.fen ? undefined : ctx.getContext().gameId);
         if (gameId) {
@@ -418,7 +408,7 @@ export class ChessToolsService {
     });
 
     // ── start_review ─────────────────────────────────────────────────────────
-    const startReview = defineTool({
+    const startReview = defineAgentTool({
       name: 'start_review',
       label: 'Start Review',
       description:
@@ -441,7 +431,7 @@ export class ChessToolsService {
           }),
         ),
       }),
-      execute: async (_id, params) => {
+      execute: async (params) => {
         const gameId = params.gameId ?? ctx.getContext().gameId;
         if (!gameId) {
           return this.errorResult(
@@ -467,7 +457,7 @@ export class ChessToolsService {
     });
 
     // ── score_guess ──────────────────────────────────────────────────────────
-    const scoreGuess = defineTool({
+    const scoreGuess = defineAgentTool({
       name: 'score_guess',
       label: 'Score Guess',
       description:
@@ -484,7 +474,7 @@ export class ChessToolsService {
           }),
         ),
       }),
-      execute: async (_id, params) => {
+      execute: async (params) => {
         const point = this.currentReviewPoint(review);
         if (!point) {
           return this.errorResult(
@@ -544,7 +534,7 @@ export class ChessToolsService {
     });
 
     // ── next_turning_point ───────────────────────────────────────────────────
-    const nextTurningPoint = defineTool({
+    const nextTurningPoint = defineAgentTool({
       name: 'next_turning_point',
       label: 'Next Turning Point',
       description:
@@ -574,7 +564,7 @@ export class ChessToolsService {
     });
 
     // ── search_library ───────────────────────────────────────────────────────
-    const searchLibrary = defineTool({
+    const searchLibrary = defineAgentTool({
       name: 'search_library',
       label: 'Search Library',
       description:
@@ -614,7 +604,7 @@ export class ChessToolsService {
           Type.Number({ description: 'How many matches to skip (pagination).' }),
         ),
       }),
-      execute: async (_id, params) => {
+      execute: async (params) => {
         const query: LibraryQuery = {
           q: params.q,
           player: params.player,
@@ -640,7 +630,7 @@ export class ChessToolsService {
     });
 
     // ── open_game ────────────────────────────────────────────────────────────
-    const openGame = defineTool({
+    const openGame = defineAgentTool({
       name: 'open_game',
       label: 'Open Game',
       description:
@@ -651,7 +641,7 @@ export class ChessToolsService {
       parameters: Type.Object({
         id: Type.String({ description: 'The stored game id (from search_library).' }),
       }),
-      execute: async (_id, params) => {
+      execute: async (params) => {
         const game = this.library.getGame(params.id);
         if (!game) {
           return this.errorResult(`Game not found: ${params.id}.`);
@@ -683,7 +673,7 @@ export class ChessToolsService {
     });
 
     // ── list_collections ─────────────────────────────────────────────────────
-    const listCollections = defineTool({
+    const listCollections = defineAgentTool({
       name: 'list_collections',
       label: 'List Collections',
       description:
@@ -706,7 +696,11 @@ export class ChessToolsService {
       },
     });
 
-    return [
+    // Each tool is internally well-typed against its own TObject schema; the
+    // registry erases the per-tool param type to the neutral `AgentTool[]` (the
+    // schemas are heterogeneous, and `execute`'s param is contravariant, so they
+    // don't unify under `AgentTool<TSchema>` without this widening).
+    const tools: AgentTool[] = [
       loadPgn,
       loadFen,
       getPosition,
@@ -724,7 +718,8 @@ export class ChessToolsService {
       searchLibrary,
       openGame,
       listCollections,
-    ];
+    ] as unknown as AgentTool[];
+    return tools;
   }
 
   // ── coaching helpers ─────────────────────────────────────────────────────
