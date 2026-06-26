@@ -18,6 +18,7 @@ import {
   mainlineNodeAtPly,
   nearestMainlinePly,
 } from "@/lib/moveTree";
+import * as api from "@/lib/api";
 
 export const START_FEN =
   "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -208,6 +209,15 @@ export interface AnalyzerState {
   chat: ChatMessage[];
   streaming: boolean;
   sessionId: string;
+  /** Selected agent model id (undefined → backend default). Per-session: changing
+   *  it starts a fresh chat. */
+  model?: string;
+  /** SDK-native session id from the `session` AgentEvent; shown in the header and
+   *  used as the resume seed when continuing. */
+  currentSessionId?: string;
+  /** When set, the next stream opens with `?resume=<id>` to continue that SDK
+   *  session; cleared by `newChat`. */
+  resumeId?: string;
   /**
    * A raw FEN pushed by the agent (e.g. an off-game variation). When set it
    * overrides the game+ply derivation in `currentFen`. Cleared on navigation
@@ -232,6 +242,10 @@ export interface AnalyzerState {
   appendAssistantDelta: (delta: string) => void;
   addToolEvent: (tool: string, ok?: boolean) => void;
   endAssistantMessage: () => void;
+  setModel: (id: string) => void;
+  newChat: () => void;
+  continueSession: (sdkId: string) => Promise<void>;
+  setSessionId: (sdkId: string) => void;
   setBoardFromAgent: (fen: string, ply?: number) => void;
   setCoachQuestion: (question: CoachQuestion) => void;
   setCoachReveal: (reveal: CoachReveal) => void;
@@ -285,6 +299,9 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
   chat: [],
   streaming: false,
   sessionId: crypto.randomUUID(),
+  model: undefined,
+  currentSessionId: undefined,
+  resumeId: undefined,
   agentFen: null,
   coach: IDLE_COACH,
 
@@ -405,6 +422,43 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
     }),
 
   endAssistantMessage: () => set({ streaming: false }),
+
+  setModel: (id) =>
+    set({
+      model: id,
+      // Model is per-session: a new model starts a fresh chat.
+      chat: [],
+      resumeId: undefined,
+      currentSessionId: undefined,
+      sessionId: crypto.randomUUID(),
+    }),
+
+  newChat: () =>
+    set({
+      chat: [],
+      resumeId: undefined,
+      currentSessionId: undefined,
+      // A new connection id re-keys the ChatPanel effect → the SSE stream reopens.
+      sessionId: crypto.randomUUID(),
+    }),
+
+  continueSession: async (sdkId) => {
+    const messages = await api.getSessionMessages(sdkId);
+    set({
+      chat: messages.map((m) => ({
+        id: crypto.randomUUID(),
+        role: m.role,
+        text: m.text,
+        tools: [],
+      })),
+      resumeId: sdkId,
+      currentSessionId: sdkId,
+      // New connection id → stream reopens with `?resume=sdkId`.
+      sessionId: crypto.randomUUID(),
+    });
+  },
+
+  setSessionId: (sdkId) => set({ currentSessionId: sdkId }),
 
   setBoardFromAgent: (fen, ply) => {
     const s = get();

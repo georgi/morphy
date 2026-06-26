@@ -18,6 +18,9 @@ import type {
   ImportJob,
   ImportEvent,
   KeyMoment,
+  ModelInfo,
+  SessionSummary,
+  TranscriptMessage,
 } from "@chess/shared";
 
 const BASE = "/api";
@@ -188,6 +191,23 @@ export function openImportStream(
   return source;
 }
 
+/** List the active backend's available models for the picker. */
+export function listModels(): Promise<ModelInfo[]> {
+  return request<ModelInfo[]>("/agent/models");
+}
+
+/** List stored agent sessions for the history popover. */
+export function listSessions(): Promise<SessionSummary[]> {
+  return request<SessionSummary[]>("/agent/sessions");
+}
+
+/** Fetch a stored session's transcript (user/assistant text) for continue. */
+export function getSessionMessages(id: string): Promise<TranscriptMessage[]> {
+  return request<TranscriptMessage[]>(
+    `/agent/sessions/${encodeURIComponent(id)}`,
+  );
+}
+
 export async function sendAgentMessage(
   sessionId: string,
   body: AgentMessageRequest,
@@ -201,13 +221,19 @@ export async function sendAgentMessage(
 /**
  * Opens a persistent SSE stream of {@link AgentEvent}s for a chat session.
  * The caller owns the returned {@link EventSource} and must `.close()` it.
+ * `model`/`resume` are read by the server when the session is created/resumed.
  */
 export function openAgentStream(
   sessionId: string,
   onEvent: (e: AgentEvent) => void,
+  opts?: { model?: string; resume?: string },
 ): EventSource {
+  const params = new URLSearchParams();
+  if (opts?.model) params.set("model", opts.model);
+  if (opts?.resume) params.set("resume", opts.resume);
+  const qs = params.toString();
   const source = new EventSource(
-    `${BASE}/agent/${encodeURIComponent(sessionId)}/stream`,
+    `${BASE}/agent/${encodeURIComponent(sessionId)}/stream${qs ? `?${qs}` : ""}`,
   );
   source.onmessage = (msg) => {
     try {

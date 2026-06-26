@@ -66,6 +66,9 @@ beforeEach(() => {
     analysis: null,
     chat: [],
     streaming: false,
+    model: undefined,
+    currentSessionId: undefined,
+    resumeId: undefined,
     agentFen: null,
   });
 });
