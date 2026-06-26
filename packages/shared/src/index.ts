@@ -221,8 +221,33 @@ export interface AgentMessageRequest {
   ply?: number;
 }
 
+/** A model offered by the active agent backend, for the model picker. */
+export interface ModelInfo {
+  id: string;
+  provider?: string;
+  label?: string;
+  contextWindow?: number;
+}
+
+/** A summary of a stored agent session (for the session list / continue UI). */
+export interface SessionSummary {
+  id: string;
+  title?: string;
+  createdAt?: string; // ISO 8601
+  updatedAt?: string; // ISO 8601
+  messageCount?: number;
+  model?: string; // populated when the SDK surfaces it; shown on a resumed session
+}
+
+/** A replayed transcript turn (user/assistant text only) for the continue UI. */
+export interface TranscriptMessage {
+  role: "user" | "assistant";
+  text: string;
+}
+
 export type AgentEvent =
   | { type: "text_delta"; delta: string }
+  | { type: "session"; id: string; model?: string }
   | { type: "tool_start"; tool: string; args?: unknown }
   | { type: "tool_end"; tool: string; ok: boolean; summary?: string }
   | { type: "board_update"; fen: string; gameId?: string; ply?: number }
