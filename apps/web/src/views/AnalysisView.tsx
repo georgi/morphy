@@ -1,10 +1,19 @@
+import { useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { BarChart3, Library, Loader2 } from "lucide-react";
+import {
+  BarChart3,
+  Library,
+  Loader2,
+  PanelRightClose,
+  PanelRightOpen,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
+  useDefaultLayout,
+  usePanelRef,
 } from "@/components/ui/resizable";
 import { Separator } from "@/components/ui/separator";
 import { BoardPanel } from "@/components/board/BoardPanel";
@@ -59,6 +68,26 @@ function ReviewingSubtitle() {
 export function AnalysisView() {
   const { analyze, isPending, canAnalyze } = useAnalyzeGame();
 
+  // The chat panel stays mounted when collapsed (size 0) so its persistent SSE
+  // stream to the analyst survives a collapse. `chatCollapsed` mirrors the panel
+  // so the header toggle and a manual handle-drag always agree.
+  const chatPanel = usePanelRef();
+  const [chatCollapsed, setChatCollapsed] = useState(false);
+
+  // Persist the whole three-pane layout (incl. the chat collapse) across reloads.
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: "analysis-layout",
+    panelIds: ["board", "review", "chat"],
+    storage: typeof window !== "undefined" ? window.localStorage : undefined,
+  });
+
+  const toggleChat = () => {
+    const panel = chatPanel.current;
+    if (!panel) return;
+    if (panel.isCollapsed()) panel.expand();
+    else panel.collapse();
+  };
+
   return (
     <div className="flex h-screen flex-col bg-background">
       <header className="flex items-center gap-3 border-b border-border px-4 py-2">
@@ -85,24 +114,45 @@ export function AnalysisView() {
             {isPending ? "Analyzing…" : "Analyze game"}
           </Button>
           <Separator orientation="vertical" className="!h-5" />
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleChat}
+            aria-label="Toggle analyst chat"
+            aria-expanded={!chatCollapsed}
+            title="Toggle analyst chat"
+            className={!chatCollapsed ? "bg-primary/10 text-primary" : undefined}
+          >
+            {chatCollapsed ? <PanelRightOpen /> : <PanelRightClose />}
+          </Button>
           <ThemeToggle />
         </div>
       </header>
 
-      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-        <ResizablePanel defaultSize={42} minSize={30}>
+      <ResizablePanelGroup
+        orientation="horizontal"
+        className="min-h-0 flex-1"
+        defaultLayout={defaultLayout}
+        onLayoutChanged={onLayoutChanged}
+      >
+        <ResizablePanel id="board" defaultSize={42} minSize={30}>
           <BoardPanel />
         </ResizablePanel>
         <ResizableHandle withHandle />
-        <ResizablePanel defaultSize={33} minSize={22}>
+        <ResizablePanel id="review" defaultSize={33} minSize={22}>
           <ReviewPanel />
         </ResizablePanel>
         <ResizableHandle withHandle />
         <ResizablePanel
+          id="chat"
+          panelRef={chatPanel}
           defaultSize={25}
           minSize={16}
           collapsible
           collapsedSize={0}
+          onResize={(size) =>
+            setChatCollapsed(chatPanel.current?.isCollapsed() ?? size.asPercentage === 0)
+          }
         >
           <ChatPanel />
         </ResizablePanel>

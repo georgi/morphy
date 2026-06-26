@@ -123,4 +123,14 @@ describe("AnalysisView smoke render", () => {
       screen.getAllByText(/no game loaded/i).length,
     ).toBeGreaterThanOrEqual(2);
   });
+
+  it("renders a chat toggle that starts expanded", async () => {
+    // No persisted layout → the chat panel mounts open.
+    localStorage.clear();
+    renderView();
+    const toggle = await screen.findByRole("button", {
+      name: /toggle analyst chat/i,
+    });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  });
 });
