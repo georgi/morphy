@@ -1,17 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { Type } from '@sinclair/typebox';
-import type {
-  EngineEval,
-  GameSummary,
-  ImportSource,
-  LibraryQuery,
-  TurningPoint,
-} from '@chess/shared';
+import type { EngineEval, TurningPoint } from '@chess/shared';
 import { ChessService } from '../chess/chess.service';
-import { GameStore } from '../chess/game.store';
 import { AnalysisService } from '../analysis/analysis.service';
 import { CoachService } from '../analysis/coach.service';
-import { LibraryService } from '../library/library.service';
 import { defineAgentTool, type AgentTool } from './harness/agent-tool';
 import type { ToolSessionContext } from './harness/agent-tool';
 
@@ -24,20 +16,20 @@ const MAX_TOOL_TEXT = 8_000;
 
 /**
  * Builds the backend-neutral agent tool registry. Every tool is a thin wrapper
- * that delegates to ChessService / AnalysisService / GameStore — the same services
- * the REST API uses — and returns a text-content result. Tools that move the board
- * the user sees (`load_pgn`, `load_fen`, `goto_move`) additionally emit a
- * `board_update` event so the client follows the agent. The active {@link
- * AgentHarness} wraps these tools onto its own SDK's tool shape.
+ * that delegates to ChessService / AnalysisService / CoachService and returns a
+ * text-content result. Tools operate on the session's CURRENT GAME, held by value
+ * on the {@link ToolSessionContext} (the client sends it with each message);
+ * `load_pgn`/`load_fen` replace it. Tools that move the board the user sees
+ * (`load_pgn`, `load_fen`, `goto_move`) additionally emit a `board_update` event
+ * so the client follows the agent. The active {@link AgentHarness} wraps these
+ * tools onto its own SDK's tool shape.
  */
 @Injectable()
 export class ChessToolsService {
   constructor(
     private readonly chess: ChessService,
-    private readonly store: GameStore,
     private readonly analysis: AnalysisService,
     private readonly coach: CoachService,
-    private readonly library: LibraryService,
   ) {}
 
   /**
@@ -70,7 +62,8 @@ export class ChessToolsService {
         pgn: Type.String({ description: 'The full PGN text of the game.' }),
       }),
       execute: async (params) => {
-        const game = this.store.create(this.chess.importPgn(params.pgn));
+        const game = this.chess.importPgn(params.pgn);
+        ctx.setGame(game);
         ctx.emit({
           type: 'board_update',
           fen: game.startFen,
@@ -108,7 +101,8 @@ export class ChessToolsService {
         fen: Type.String({ description: 'A valid FEN position string.' }),
       }),
       execute: async (params) => {
-        const game = this.store.create(this.chess.importFen(params.fen));
+        const game = this.chess.importFen(params.fen);
+        ctx.setGame(game);
         ctx.emit({
           type: 'board_update',
           fen: game.startFen,
@@ -127,16 +121,10 @@ export class ChessToolsService {
       name: 'get_position',
       label: 'Get Position',
       description:
-        'Return the FEN of a game at a given ply (half-move). Ply 0 is the ' +
-        'starting position; ply N is the position after the N-th half-move. ' +
-        'Omit gameId to use the game the user is currently viewing.',
+        'Return the FEN of the current game at a given ply (half-move). Ply 0 is ' +
+        'the starting position; ply N is the position after the N-th half-move. ' +
+        'Omit ply to use the position the user is currently viewing.',
       parameters: Type.Object({
-        gameId: Type.Optional(
-          Type.String({
-            description:
-              'Game id. Defaults to the current game when omitted.',
-          }),
-        ),
         ply: Type.Optional(
           Type.Number({
             description:
@@ -145,12 +133,9 @@ export class ChessToolsService {
         ),
       }),
       execute: async (params) => {
-        const gameId = params.gameId ?? ctx.getContext().gameId;
-        const game = gameId ? this.store.get(gameId) : undefined;
+        const game = ctx.getContext().game;
         if (!game) {
-          return this.errorResult(
-            `No game found${gameId ? ` for id ${gameId}` : ''}. Load a game first.`,
-          );
+          return this.errorResult('No game loaded. Load a game first.');
         }
         const ply = params.ply ?? ctx.getContext().ply ?? 0;
         const fen = this.chess.positionAtPly(game, ply);
@@ -208,24 +193,17 @@ export class ChessToolsService {
       name: 'goto_move',
       label: 'Go To Move',
       description:
-        'Navigate the board the user is looking at to a specific ply of a game. ' +
-        'Call this whenever you reference a position so the user sees what you ' +
-        'are talking about. Ply 0 is the start; ply N is after the N-th half-move.',
+        'Navigate the board the user is looking at to a specific ply of the ' +
+        'current game. Call this whenever you reference a position so the user ' +
+        'sees what you are talking about. Ply 0 is the start; ply N is after the ' +
+        'N-th half-move.',
       parameters: Type.Object({
-        gameId: Type.Optional(
-          Type.String({
-            description: 'Game id. Defaults to the current game when omitted.',
-          }),
-        ),
         ply: Type.Number({ description: 'Half-move index to navigate to.' }),
       }),
       execute: async (params) => {
-        const gameId = params.gameId ?? ctx.getContext().gameId;
-        const game = gameId ? this.store.get(gameId) : undefined;
+        const game = ctx.getContext().game;
         if (!game) {
-          return this.errorResult(
-            `No game found${gameId ? ` for id ${gameId}` : ''}. Load a game first.`,
-          );
+          return this.errorResult('No game loaded. Load a game first.');
         }
         const ply = Math.max(0, Math.min(params.ply, game.moves.length));
         const fen = this.chess.positionAtPly(game, ply);
@@ -294,24 +272,13 @@ export class ChessToolsService {
       name: 'analyze_game',
       label: 'Analyze Game',
       description:
-        'Scan every move of a stored game with the engine, building the eval ' +
-        'curve and flagging inaccuracies, mistakes, and blunders. Omit gameId ' +
-        'to use the current game.',
-      parameters: Type.Object({
-        gameId: Type.Optional(
-          Type.String({
-            description: 'Game id. Defaults to the current game when omitted.',
-          }),
-        ),
-      }),
-      execute: async (params) => {
-        const gameId = params.gameId ?? ctx.getContext().gameId;
-        if (!gameId) {
-          return this.errorResult('No game to analyze. Load a game first.');
-        }
-        const game = this.store.get(gameId);
+        'Scan every move of the current game with the engine, building the eval ' +
+        'curve and flagging inaccuracies, mistakes, and blunders.',
+      parameters: Type.Object({}),
+      execute: async () => {
+        const game = ctx.getContext().game;
         if (!game) {
-          return this.errorResult(`Game not found: ${gameId}.`);
+          return this.errorResult('No game to analyze. Load a game first.');
         }
         const evals = await this.analysis.analyzeGame(game);
         const flagged = evals.filter((e) =>
@@ -323,10 +290,10 @@ export class ChessToolsService {
             `(cp loss ${e.cpLoss}, best ${e.bestMove ?? 'n/a'})`,
         );
         const summary =
-          `Analyzed ${evals.length} moves of game ${gameId}. ` +
+          `Analyzed ${evals.length} moves of game ${game.id}. ` +
           `${flagged.length} flagged.` +
           (lines.length ? `\n${lines.join('\n')}` : '');
-        return this.textResult(summary, { gameId, evals });
+        return this.textResult(summary, { gameId: game.id, evals });
       },
     });
 
@@ -363,28 +330,25 @@ export class ChessToolsService {
       name: 'identify_opening',
       label: 'Identify Opening',
       description:
-        'Identify the opening (ECO code + name) from a game (by gameId) or from ' +
-        'a FEN / PGN / list of SAN moves. Uses the bundled ECO table. Omit both ' +
-        'to use the current game.',
+        'Identify the opening (ECO code + name) from the current game or from a ' +
+        'FEN / PGN / list of SAN moves. Uses the bundled ECO table. Omit fen to ' +
+        'use the current game.',
       parameters: Type.Object({
-        gameId: Type.Optional(
-          Type.String({
-            description: 'Game id. Defaults to the current game when omitted.',
-          }),
-        ),
         fen: Type.Optional(
           Type.String({
-            description: 'A FEN or PGN string to identify (alternative to gameId).',
+            description:
+              'A FEN or PGN string to identify (alternative to the current game).',
           }),
         ),
       }),
       execute: async (params) => {
         let opening: { eco?: string; name?: string };
-        const gameId = params.gameId ?? (params.fen ? undefined : ctx.getContext().gameId);
-        if (gameId) {
-          const game = this.store.get(gameId);
+        if (params.fen) {
+          opening = this.chess.identifyOpening(params.fen);
+        } else {
+          const game = ctx.getContext().game;
           if (!game) {
-            return this.errorResult(`Game not found: ${gameId}.`);
+            return this.errorResult('Provide a fen/pgn, or load a game first.');
           }
           opening = {
             eco: game.headers.eco,
@@ -393,12 +357,6 @@ export class ChessToolsService {
           if (!opening.eco && !opening.name) {
             opening = this.chess.identifyOpening(game.moves.map((m) => m.san));
           }
-        } else if (params.fen) {
-          opening = this.chess.identifyOpening(params.fen);
-        } else {
-          return this.errorResult(
-            'Provide a gameId or a fen/pgn, or load a game first.',
-          );
         }
         const text =
           opening.eco || opening.name
@@ -418,14 +376,9 @@ export class ChessToolsService {
         'one, and puts the UI into quiz mode so the user can try to find a better ' +
         'move. Returns the setup for that first turning point — whose move it is, ' +
         'what was actually played, and how bad it was — but NOT the best move (do ' +
-        'not reveal it; ask the user to find it). Omit gameId to review the game ' +
-        'the user is currently viewing. Call score_guess once the user answers.',
+        'not reveal it; ask the user to find it). Reviews the current game. Call ' +
+        'score_guess once the user answers.',
       parameters: Type.Object({
-        gameId: Type.Optional(
-          Type.String({
-            description: 'Game id. Defaults to the current game when omitted.',
-          }),
-        ),
         max: Type.Optional(
           Type.Number({
             description: 'How many turning points to review (default 5).',
@@ -433,27 +386,24 @@ export class ChessToolsService {
         ),
       }),
       execute: async (params) => {
-        const gameId = params.gameId ?? ctx.getContext().gameId;
-        if (!gameId) {
+        const game = ctx.getContext().game;
+        if (!game) {
           return this.errorResult(
             'No game to review. Ask the user to import a game first.',
           );
         }
-        if (!this.store.has(gameId)) {
-          return this.errorResult(`Game not found: ${gameId}.`);
-        }
-        const points = await this.coach.computeTurningPoints(gameId, {
+        const points = await this.coach.computeTurningPoints(game, {
           max: params.max,
         });
-        review = { gameId, points, cursor: 0 };
+        review = { gameId: game.id, points, cursor: 0 };
         if (points.length === 0) {
           return this.textResult(
             'No significant mistakes found — the game was cleanly played. ' +
               'Tell the user so and offer to look at anything specific.',
-            { gameId, total: 0 },
+            { gameId: game.id, total: 0 },
           );
         }
-        return this.presentTurningPoint(ctx, gameId, points[0], points.length);
+        return this.presentTurningPoint(ctx, game.id, points[0], points.length);
       },
     });
 
@@ -564,139 +514,6 @@ export class ChessToolsService {
       },
     });
 
-    // ── search_library ───────────────────────────────────────────────────────
-    const searchLibrary = defineAgentTool({
-      name: 'search_library',
-      label: 'Search Library',
-      description:
-        'Search the stored game library. Filter by free-text query (players / ' +
-        'opening / ECO), player name, ECO code, result, source, or collection, ' +
-        'and sort/paginate. Returns matching games as summaries (id, players, ' +
-        'result, opening, date) plus the total match count — use the returned ' +
-        'gameId with open_game or analyze_game.',
-      parameters: Type.Object({
-        q: Type.Optional(
-          Type.String({
-            description: 'Free-text search over players, opening, and ECO.',
-          }),
-        ),
-        player: Type.Optional(
-          Type.String({ description: 'Filter to games with this player (White or Black).' }),
-        ),
-        eco: Type.Optional(
-          Type.String({ description: 'Filter by ECO code, e.g. "B90".' }),
-        ),
-        result: Type.Optional(
-          Type.String({ description: 'Filter by result, e.g. "1-0", "0-1", "1/2-1/2".' }),
-        ),
-        source: Type.Optional(
-          Type.String({
-            description:
-              'Filter by import source: manual, lichess, chesscom, catalog, or url.',
-          }),
-        ),
-        collectionId: Type.Optional(
-          Type.String({ description: 'Restrict to games in this collection.' }),
-        ),
-        limit: Type.Optional(
-          Type.Number({ description: 'Max games to return (default 25).' }),
-        ),
-        offset: Type.Optional(
-          Type.Number({ description: 'How many matches to skip (pagination).' }),
-        ),
-      }),
-      execute: async (params) => {
-        const query: LibraryQuery = {
-          q: params.q,
-          player: params.player,
-          eco: params.eco,
-          result: params.result,
-          source: params.source as ImportSource | undefined,
-          collectionId: params.collectionId,
-          limit: params.limit,
-          offset: params.offset,
-        };
-        const page = this.library.searchGames(query);
-        const text =
-          page.total === 0
-            ? 'No games match that search.'
-            : `${page.total} matching game${page.total === 1 ? '' : 's'} ` +
-              `(showing ${page.games.length}):\n` +
-              page.games.map((g) => this.formatGameSummary(g)).join('\n');
-        return this.textResult(text, {
-          total: page.total,
-          games: page.games,
-        });
-      },
-    });
-
-    // ── open_game ────────────────────────────────────────────────────────────
-    const openGame = defineAgentTool({
-      name: 'open_game',
-      label: 'Open Game',
-      description:
-        'Open a stored library game by id: loads it as the active game and drives ' +
-        "the board the user sees to its starting position (like goto_move). Use " +
-        'the id returned by search_library. Returns the game headers, move count, ' +
-        'and opening.',
-      parameters: Type.Object({
-        id: Type.String({ description: 'The stored game id (from search_library).' }),
-      }),
-      execute: async (params) => {
-        const game = this.library.getGame(params.id);
-        if (!game) {
-          return this.errorResult(`Game not found: ${params.id}.`);
-        }
-        ctx.emit({
-          type: 'board_update',
-          fen: game.startFen,
-          gameId: game.id,
-          ply: 0,
-        });
-        const opening = game.headers.opening
-          ? `${game.headers.eco ?? ''} ${game.headers.opening}`.trim()
-          : 'unknown';
-        const players = [game.headers.white, game.headers.black]
-          .filter(Boolean)
-          .join(' vs ');
-        const text = [
-          `Opened game ${game.id}.`,
-          players ? `Players: ${players}.` : null,
-          game.headers.result ? `Result: ${game.headers.result}.` : null,
-          `Moves: ${game.moves.length} (${Math.ceil(game.moves.length / 2)} full moves).`,
-          `Opening: ${opening}.`,
-          `Starting FEN: ${game.startFen}`,
-        ]
-          .filter(Boolean)
-          .join('\n');
-        return this.textResult(text, { gameId: game.id });
-      },
-    });
-
-    // ── list_collections ─────────────────────────────────────────────────────
-    const listCollections = defineAgentTool({
-      name: 'list_collections',
-      label: 'List Collections',
-      description:
-        'List the game collections in the library (Lichess studies, Chess.com ' +
-        'archives, catalog entries, named imports), each with its game count. Use ' +
-        'a returned collection id as the collectionId filter for search_library.',
-      parameters: Type.Object({}),
-      execute: async () => {
-        const collections = this.library.listCollections();
-        const text = collections.length
-          ? `${collections.length} collection${collections.length === 1 ? '' : 's'}:\n` +
-            collections
-              .map(
-                (c) =>
-                  `${c.id} — ${c.name} (${c.gameCount} game${c.gameCount === 1 ? '' : 's'}, ${c.source})`,
-              )
-              .join('\n')
-          : 'No collections yet.';
-        return this.textResult(text, { collections });
-      },
-    });
-
     // Each tool is internally well-typed against its own TObject schema; the
     // registry erases the per-tool param type to the neutral `AgentTool[]` (the
     // schemas are heterogeneous, and `execute`'s param is contravariant, so they
@@ -716,9 +533,6 @@ export class ChessToolsService {
       startReview,
       scoreGuess,
       nextTurningPoint,
-      searchLibrary,
-      openGame,
-      listCollections,
     ] as unknown as AgentTool[];
     return tools;
   }
@@ -829,15 +643,6 @@ export class ChessToolsService {
   }
 
   // ── formatting ───────────────────────────────────────────────────────────
-
-  /** One-line library row for the agent: `id  White vs Black  result  ECO opening  date`. */
-  private formatGameSummary(g: GameSummary): string {
-    const players = `${g.white ?? '?'} vs ${g.black ?? '?'}`;
-    const result = g.result && g.result !== '*' ? g.result : '';
-    const opening = [g.eco, g.opening].filter(Boolean).join(' ');
-    const parts = [g.id, players, result, opening, g.date].filter(Boolean);
-    return `  ${parts.join('  ')}`;
-  }
 
   private formatEngineEval(evaluation: EngineEval): string {
     const header = `Best move: ${evaluation.bestMove ?? 'n/a'} (depth ${evaluation.depth}).`;

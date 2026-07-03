@@ -11,7 +11,6 @@ import type {
   TranscriptMessage,
 } from "@chess/shared";
 import { ChessService } from "../chess/chess.service";
-import { GameStore } from "../chess/game.store";
 import {
   ChessToolsService,
   type ToolSessionContext,
@@ -37,8 +36,13 @@ interface SessionState {
   runner: AgentRunner;
   /** Fan-out channel: every translated AgentEvent is pushed here and streamed via SSE. */
   subject: Subject<AgentEvent>;
-  /** The game/ply the user is currently viewing, updated on each posted message. */
-  context: { gameId?: string; ply?: number };
+  /**
+   * The session's current game (by value) and the ply the user is viewing. Mutated
+   * IN PLACE on each posted message and by `load_pgn`/`load_fen` (via the tool
+   * context's `setGame`), so the tools' `getContext()` closure always sees the
+   * latest game.
+   */
+  context: { game?: Game; ply?: number };
 }
 
 /** How many recent moves to include in the prompt context when a game is active. */
@@ -86,7 +90,6 @@ export class AgentService {
   constructor(
     private readonly tools: ChessToolsService,
     private readonly chess: ChessService,
-    private readonly store: GameStore,
     @Inject(AGENT_HARNESS) private readonly harness: AgentHarness,
     @Inject(MODEL_FILTER) private readonly modelFilter: ModelFilter,
   ) {}
@@ -141,7 +144,10 @@ export class AgentService {
     body: AgentMessageRequest,
   ): Promise<void> {
     const state = await this.ensureSession(sessionId);
-    state.context = { gameId: body.gameId, ply: body.ply };
+    // Mutate in place: the tools' getContext() closure holds this same object, so
+    // a fresh assignment would leave them pointing at the stale context.
+    state.context.game = body.game;
+    state.context.ply = body.ply;
 
     const prompt = this.buildPrompt(body);
     try {
@@ -213,10 +219,14 @@ export class AgentService {
       this.pendingSubjects.get(sessionId) ?? new Subject<AgentEvent>();
     this.pendingSubjects.delete(sessionId);
 
-    const context: { gameId?: string; ply?: number } = {};
+    const context: { game?: Game; ply?: number } = {};
     const toolCtx: ToolSessionContext = {
       emit: (event) => subject.next(event),
       getContext: () => context,
+      // load_pgn/load_fen replace the session's current game in place.
+      setGame: (game) => {
+        context.game = game;
+      },
     };
 
     const tools = await this.tools.buildToolsForSession(toolCtx);
@@ -262,7 +272,7 @@ export class AgentService {
    * so the agent can act without re-querying basic state.
    */
   private buildPrompt(body: AgentMessageRequest): string {
-    const game = body.gameId ? this.store.get(body.gameId) : undefined;
+    const game = body.game;
     if (!game) return body.text;
 
     const ply = body.ply ?? game.moves.length;

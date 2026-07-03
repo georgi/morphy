@@ -81,7 +81,7 @@ function onCoachDrop({
   api
     .sendAgentMessage(store.sessionId, {
       text,
-      gameId: question.gameId,
+      game: store.game ?? undefined,
       ply: question.ply,
     })
     .catch((err: unknown) => {

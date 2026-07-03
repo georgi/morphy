@@ -1,5 +1,5 @@
 import type { Static, TSchema } from '@sinclair/typebox';
-import type { AgentEvent } from '@chess/shared';
+import type { AgentEvent, Game } from '@chess/shared';
 
 /**
  * A backend-neutral tool result. The text `content` is what the model reads; the
@@ -32,13 +32,17 @@ export const defineAgentTool = <P extends TSchema>(
 
 /**
  * Context handed to the chess tools when they are built for a chat session. The
- * tools use it to (a) push UI-affecting events onto the session's SSE stream and
- * (b) read the active game/ply the user is looking at, so tools that don't take an
- * explicit game can default to the current one.
+ * tools use it to (a) push UI-affecting events onto the session's SSE stream,
+ * (b) read the session's current game (held by value) and the ply the user is
+ * looking at, and (c) replace the current game (`load_pgn`/`load_fen`). There is
+ * no shared game store: the client sends the open game with each message, and
+ * imports made mid-turn live only on this session context.
  */
 export interface ToolSessionContext {
   /** Emit an AgentEvent onto this session's stream (e.g. a board_update). */
   emit: (event: AgentEvent) => void;
-  /** The game/ply the user is currently viewing, if any. */
-  getContext: () => { gameId?: string; ply?: number };
+  /** The session's current game (by value) and the ply the user is viewing, if any. */
+  getContext: () => { game?: Game; ply?: number };
+  /** Replace the session's current game (used by `load_pgn`/`load_fen`). */
+  setGame: (game: Game) => void;
 }

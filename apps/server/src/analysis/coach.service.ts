@@ -1,7 +1,6 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import type { Color, Game, MoveEval, TurningPoint } from '@chess/shared';
 import { ChessService } from '../chess/chess.service';
-import { GameStore } from '../chess/game.store';
 import { AnalysisService } from './analysis.service';
 
 /** Default number of turning points to surface for a review. */
@@ -28,33 +27,24 @@ const TURNING_POINT_CLASSES = new Set<MoveEval['classification']>([
 export class CoachService {
   constructor(
     private readonly chess: ChessService,
-    private readonly store: GameStore,
     private readonly analysis: AnalysisService,
   ) {}
 
   /**
-   * Compute the review turning points for a game: take the top `max` mistakes/
-   * blunders by centipawn loss, then sort them chronologically by ply and build a
-   * {@link TurningPoint} per move (position before, played move, best move/line in
-   * SAN). Reuses the cached game analysis when present, otherwise runs a scan.
-   *
-   * @throws BadRequestException if no game with `gameId` is stored.
+   * Compute the review turning points for a game (passed by value): take the top
+   * `max` mistakes/blunders by centipawn loss, then sort them chronologically by
+   * ply and build a {@link TurningPoint} per move (position before, played move,
+   * best move/line in SAN). Reuses `game.analysis` when present, otherwise runs a
+   * one-off engine scan (not cached anywhere — the client owns the game).
    */
   async computeTurningPoints(
-    gameId: string,
+    game: Game,
     opts: { max?: number } = {},
   ): Promise<TurningPoint[]> {
-    const game = this.store.get(gameId);
-    if (!game) {
-      throw new BadRequestException(`Game not found: ${gameId}.`);
-    }
-
     const max = opts.max ?? DEFAULT_MAX_TURNING_POINTS;
-    // The agent still operates by-id (full migration is a later task): resolve
-    // the game once above, run the by-value analysis here if it isn't cached
-    // yet, then cache it back onto the store so a later call (e.g. a second
-    // review in the same session) reuses it instead of re-scanning.
-    const evals = game.analysis ?? (await this.analyzeAndCache(game));
+    // Prefer the eval curve the game already carries; otherwise compute it once
+    // for this review. Nothing is written back — there is no shared store.
+    const evals = game.analysis ?? (await this.analysis.analyzeGame(game));
 
     const selected = evals
       .filter((e) => TURNING_POINT_CLASSES.has(e.classification))
@@ -70,13 +60,6 @@ export class CoachService {
   }
 
   // ── internals ──────────────────────────────────────────────────────────────
-
-  /** Run the by-value engine scan for `game` and cache the curve back onto the store. */
-  private async analyzeAndCache(game: Game): Promise<MoveEval[]> {
-    const evals = await this.analysis.analyzeGame(game);
-    this.store.setAnalysis(game.id, evals);
-    return evals;
-  }
 
   private toTurningPoint(
     game: Game,

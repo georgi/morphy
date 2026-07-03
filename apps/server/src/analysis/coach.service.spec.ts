@@ -1,6 +1,5 @@
-import { BadRequestException } from '@nestjs/common';
 import { Chess } from 'chess.js';
-import type { EngineEval, MoveEval } from '@chess/shared';
+import type { EngineEval, Game, MoveEval } from '@chess/shared';
 import { CoachService } from './coach.service';
 import { AnalysisService } from './analysis.service';
 import { EngineService, type AnalyzeOptions } from '../engine/engine.service';
@@ -9,7 +8,6 @@ import { EngineUnavailableError } from '../engine/errors';
 import { EvalCacheRepository } from '../persistence/eval-cache.repository';
 import { openDatabase, type Db } from '../persistence/database';
 import { ChessService } from '../chess/chess.service';
-import { GameStore } from '../chess/game.store';
 
 // Morphy's Opera Game: famous, decisive, and full of instructive Black errors.
 const OPERA_GAME_PGN = `[Event "Paris Opera"]
@@ -38,7 +36,7 @@ async function stockfishAvailable(engine: EngineService): Promise<boolean> {
 
 /** Build a MoveEval shaped like analyzeGame's output for a single game move. */
 function moveEvalFor(
-  game: ReturnType<ChessService['importPgn']>,
+  game: Game,
   ply: number,
   cpLoss: number,
   classification: MoveEval['classification'],
@@ -58,24 +56,26 @@ function moveEvalFor(
   };
 }
 
+/** Attach a hand-built eval curve to a game (by value — no store involved). */
+function withAnalysis(game: Game, analysis: MoveEval[]): Game {
+  return { ...game, analysis };
+}
+
 describe('CoachService', () => {
   describe('computeTurningPoints (pre-seeded analysis, no engine)', () => {
     let chess: ChessService;
-    let store: GameStore;
     let coach: CoachService;
 
     beforeEach(() => {
       chess = new ChessService();
-      store = new GameStore();
       // analyzeGame is never reached when game.analysis is present, so a stub
       // AnalysisService is enough for these selection/conversion assertions.
       const analysis = {} as AnalysisService;
-      coach = new CoachService(chess, store, analysis);
+      coach = new CoachService(chess, analysis);
     });
 
     it('selects the top-N mistakes/blunders, ordered chronologically', async () => {
       const game = chess.importPgn(OPERA_GAME_PGN);
-      store.create(game);
 
       // Hand-built curve: four flagged errors + noise. cpLoss orders the picks,
       // but the returned points must come back in ply order.
@@ -86,9 +86,11 @@ describe('CoachService', () => {
         moveEvalFor(game, 4, 60, 'inaccuracy', 'd4e5', []), // ignored (inaccuracy)
         moveEvalFor(game, 12, 200, 'mistake', 'e1g1', []), // pick
       ];
-      store.setAnalysis(game.id, analysis);
 
-      const points = await coach.computeTurningPoints(game.id, { max: 2 });
+      const points = await coach.computeTurningPoints(
+        withAnalysis(game, analysis),
+        { max: 2 },
+      );
 
       // max=2 → keep the two biggest swings (plies 6 and 12), chronological.
       expect(points.map((p) => p.ply)).toEqual([6, 12]);
@@ -102,7 +104,6 @@ describe('CoachService', () => {
 
     it('defaults to 5 turning points and keeps them chronological', async () => {
       const game = chess.importPgn(OPERA_GAME_PGN);
-      store.create(game);
 
       const analysis: MoveEval[] = [
         moveEvalFor(game, 12, 500, 'blunder', 'e1g1', []),
@@ -112,9 +113,10 @@ describe('CoachService', () => {
         moveEvalFor(game, 6, 130, 'mistake', 'b1c3', []),
         moveEvalFor(game, 10, 140, 'mistake', 'a2a4', []),
       ];
-      store.setAnalysis(game.id, analysis);
 
-      const points = await coach.computeTurningPoints(game.id);
+      const points = await coach.computeTurningPoints(
+        withAnalysis(game, analysis),
+      );
 
       // Six flagged, default max 5 → drop the smallest swing (ply 4, cpLoss 110).
       expect(points).toHaveLength(5);
@@ -127,14 +129,13 @@ describe('CoachService', () => {
 
     it('builds fenBefore, sideToMove and moveNumber from the game position', async () => {
       const game = chess.importPgn(OPERA_GAME_PGN);
-      store.create(game);
 
       // Ply 4 is Black's 4...Bxf3 (a half-move; side to move at fenBefore is b).
-      store.setAnalysis(game.id, [
+      const analyzed = withAnalysis(game, [
         moveEvalFor(game, 4, 200, 'mistake', 'g4f3', ['g4f3', 'd1f3']),
       ]);
 
-      const [point] = await coach.computeTurningPoints(game.id);
+      const [point] = await coach.computeTurningPoints(analyzed);
 
       // fenBefore must equal the position at ply-1 (i.e. before the played move).
       expect(point.fenBefore).toBe(chess.positionAtPly(game, 3));
@@ -148,7 +149,6 @@ describe('CoachService', () => {
 
     it('converts the engine best move and line from UCI to SAN', async () => {
       const game = chess.importPgn(OPERA_GAME_PGN);
-      store.create(game);
 
       // Ply 6 is Black's 6th half-move (3...dxe5 here); fenBefore has Black to
       // move, where d8e7 (Qe7) and the follow-up b1c3 (Nc3) are both legal.
@@ -156,11 +156,11 @@ describe('CoachService', () => {
       const expectedBest = chess.uciToSan(fenBefore, 'd8e7');
       const expectedLine = chess.uciLineToSan(fenBefore, ['d8e7', 'b1c3']);
 
-      store.setAnalysis(game.id, [
+      const analyzed = withAnalysis(game, [
         moveEvalFor(game, 6, 150, 'mistake', 'd8e7', ['d8e7', 'b1c3']),
       ]);
 
-      const [point] = await coach.computeTurningPoints(game.id);
+      const [point] = await coach.computeTurningPoints(analyzed);
 
       expect(point.bestMove).toBe(expectedBest);
       expect(point.bestMove).toBe('Qe7');
@@ -173,7 +173,6 @@ describe('CoachService', () => {
 
     it('caps the best line at six plies', async () => {
       const game = chess.importPgn(OPERA_GAME_PGN);
-      store.create(game);
 
       // A long legal line from the start position (ply 1, White to move).
       const longLine = [
@@ -186,29 +185,22 @@ describe('CoachService', () => {
         'b5a4',
         'g8f6',
       ];
-      store.setAnalysis(game.id, [
+      const analyzed = withAnalysis(game, [
         moveEvalFor(game, 1, 120, 'mistake', 'e2e4', longLine),
       ]);
 
-      const [point] = await coach.computeTurningPoints(game.id);
+      const [point] = await coach.computeTurningPoints(analyzed);
       expect(point.bestLine).toHaveLength(6);
     });
 
     it('returns an empty array when nothing is flagged', async () => {
       const game = chess.importPgn(SCHOLARS_MATE_PGN);
-      store.create(game);
-      store.setAnalysis(game.id, [
+      const analyzed = withAnalysis(game, [
         moveEvalFor(game, 1, 5, 'good', 'e2e4', []),
         moveEvalFor(game, 2, 40, 'inaccuracy', 'd2d4', []),
       ]);
 
-      expect(await coach.computeTurningPoints(game.id)).toEqual([]);
-    });
-
-    it('throws BadRequestException for an unknown game', async () => {
-      await expect(coach.computeTurningPoints('nope')).rejects.toThrow(
-        BadRequestException,
-      );
+      expect(await coach.computeTurningPoints(analyzed)).toEqual([]);
     });
   });
 
@@ -239,16 +231,14 @@ describe('CoachService', () => {
 
     it('runs analyzeGame when the game has no cached analysis', async () => {
       const chess = new ChessService();
-      const store = new GameStore();
       const game = chess.importPgn(SCHOLARS_MATE_PGN);
-      store.create(game);
 
       // Make Black's 3...Nf6 (ply 6) walk into a position winning for White.
       const engine = fakeEngine(game.moves[5].fenAfter);
       const analysis = new AnalysisService(engine, chess);
-      const coach = new CoachService(chess, store, analysis);
+      const coach = new CoachService(chess, analysis);
 
-      const points = await coach.computeTurningPoints(game.id);
+      const points = await coach.computeTurningPoints(game);
 
       // The fake engine made the position after ply 6 winning for White, so the
       // Black move into it (ply 6) is flagged as a turning point.
@@ -260,9 +250,10 @@ describe('CoachService', () => {
       for (let i = 1; i < points.length; i++) {
         expect(points[i].ply).toBeGreaterThan(points[i - 1].ply);
       }
-      // analyzeGame was actually invoked (cached the curve back onto the game).
-      expect(store.get(game.id)?.analysis).toBeDefined();
+      // analyzeGame was actually invoked to build the curve on demand…
       expect(engine.analyze as jest.Mock).toHaveBeenCalled();
+      // …and the result was NOT cached back onto the passed game (client owns it).
+      expect(game.analysis).toBeUndefined();
     });
   });
 
@@ -270,7 +261,6 @@ describe('CoachService', () => {
     let engine: EngineService;
     let db: Db;
     let chess: ChessService;
-    let store: GameStore;
     let coach: CoachService;
     let hasEngine = false;
 
@@ -279,9 +269,8 @@ describe('CoachService', () => {
       db = openDatabase(':memory:');
       const cached = new CachedEngine(engine, new EvalCacheRepository(db));
       chess = new ChessService();
-      store = new GameStore();
       const analysis = new AnalysisService(cached, chess);
-      coach = new CoachService(chess, store, analysis);
+      coach = new CoachService(chess, analysis);
       hasEngine = await stockfishAvailable(engine);
     }, 30_000);
 
@@ -297,9 +286,8 @@ describe('CoachService', () => {
       }
 
       const game = chess.importPgn(SCHOLARS_MATE_PGN);
-      store.create(game);
 
-      const points = await coach.computeTurningPoints(game.id);
+      const points = await coach.computeTurningPoints(game);
 
       // Scholar's Mate has at least one clear Black error (allowing Qxf7#).
       expect(points.length).toBeGreaterThan(0);

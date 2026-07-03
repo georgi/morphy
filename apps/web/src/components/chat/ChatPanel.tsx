@@ -111,7 +111,7 @@ export function ChatPanel() {
     api
       .sendAgentMessage(sessionId, {
         text: trimmed,
-        gameId: game?.id,
+        game: game ?? undefined,
         ply: currentPly,
       })
       .catch((err: unknown) => {

@@ -225,7 +225,8 @@ export interface KeyMomentsRequest {
 }
 export interface AgentMessageRequest {
   text: string;
-  gameId?: string;
+  /** The open game, sent by value — the coach operates on it directly (no library lookup). */
+  game?: Game;
   ply?: number;
 }
 

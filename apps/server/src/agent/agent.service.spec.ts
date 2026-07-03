@@ -3,7 +3,6 @@ import { AgentService } from "./agent.service";
 import type { AgentHarness } from "./harness/agent-harness";
 import type { ChessToolsService } from "./chess-tools.service";
 import type { ChessService } from "../chess/chess.service";
-import type { GameStore } from "../chess/game.store";
 import { ModelFilter, createModelFilterFromEnv } from "./model-filter";
 
 const MODELS: ModelInfo[] = [
@@ -13,7 +12,7 @@ const MODELS: ModelInfo[] = [
 
 /**
  * Construct AgentService with only the collaborators the model-access paths touch
- * (harness.listModels + the filter). The chess/tools/store deps are unused here.
+ * (harness.listModels + the filter). The chess/tools deps are unused here.
  */
 function makeService(models: ModelInfo[], filter: ModelFilter): AgentService {
   const harness = {
@@ -22,7 +21,6 @@ function makeService(models: ModelInfo[], filter: ModelFilter): AgentService {
   return new AgentService(
     {} as ChessToolsService,
     {} as ChessService,
-    {} as GameStore,
     harness,
     filter,
   );
