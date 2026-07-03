@@ -58,8 +58,12 @@ export class LichessSource implements GameSource {
     const u = encodeURIComponent(id);
     switch (kind) {
       case 'user': {
-        const query = max && max > 0 ? `?max=${Math.floor(max)}` : '';
-        return `https://lichess.org/api/games/user/${u}${query}`;
+        // Always newest-first (`dateDesc`) so a `max` cap keeps the most recent
+        // games, not the oldest. It is Lichess's current default, but pinning it
+        // makes the behavior explicit and survives any default change.
+        const params = new URLSearchParams({ sort: 'dateDesc' });
+        if (max && max > 0) params.set('max', String(Math.floor(max)));
+        return `https://lichess.org/api/games/user/${u}?${params.toString()}`;
       }
       case 'study':
         return `https://lichess.org/api/study/${u}.pgn`;

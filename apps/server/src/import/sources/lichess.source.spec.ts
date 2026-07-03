@@ -87,7 +87,20 @@ describe('LichessSource', () => {
     });
 
     expect(games).toHaveLength(1);
-    expect(calls[0].url).toBe('https://lichess.org/api/games/user/DrNykterstein?max=5');
+    // Newest-first sort is pinned; the max cap therefore keeps the most recent 5.
+    expect(calls[0].url).toBe(
+      'https://lichess.org/api/games/user/DrNykterstein?sort=dateDesc&max=5',
+    );
+  });
+
+  it('pins sort=dateDesc even without a max cap', async () => {
+    const { fetchFn, calls } = streamingFetch('[Event "x"]\n\n' + A);
+    const source = new LichessSource(fetchFn);
+
+    await collect(source, { source: 'lichess', kind: 'user', id: 'DrNykterstein' });
+    expect(calls[0].url).toBe(
+      'https://lichess.org/api/games/user/DrNykterstein?sort=dateDesc',
+    );
   });
 
   it('hits the broadcast round PGN endpoint', async () => {

@@ -77,7 +77,13 @@ describe('ChessComSource', () => {
     const games = await collect(source, { source: 'chesscom', username: 'AliceCC' });
 
     expect(games).toHaveLength(3);
-    expect(games[0]).toContain('BobCC');
+    // Newest-first: February's later game (2024.02.20), then its earlier game
+    // (2024.02.03), then January's (2024.01.15). The archive index and each
+    // month's game list arrive oldest-first, so both are reversed.
+    expect(games[0]).toContain('2024.02.20');
+    expect(games[1]).toContain('2024.02.03');
+    expect(games[2]).toContain('2024.01.15');
+    expect(games[2]).toContain('BobCC');
     // Username is lowercased into the archive index URL.
     expect(calls[0].url).toBe(
       'https://api.chess.com/pub/player/alicecc/games/archives',

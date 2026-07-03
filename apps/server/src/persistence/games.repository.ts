@@ -248,7 +248,8 @@ export class GamesRepository {
    *  - `collectionId`— exact collection membership.
    *
    * `total` is the unpaginated count under the same filters. `sort` defaults to
-   * `createdAt` desc; `limit` defaults to 50 (clamped 1..200), `offset` to 0.
+   * game `date` desc (newest games first; undated rows sink to the bottom);
+   * `limit` defaults to 50 (clamped 1..200), `offset` to 0.
    */
   searchSummaries(query: LibraryQuery = {}): LibraryPage {
     const where: string[] = [];
@@ -287,10 +288,21 @@ export class GamesRepository {
       .prepare(`SELECT COUNT(*) AS total FROM games ${whereSql}`)
       .get(params) as { total: number };
 
-    const sortColumn = SORT_COLUMNS[query.sort ?? 'createdAt'];
+    const sortKey = query.sort ?? 'date';
+    const sortColumn = SORT_COLUMNS[sortKey];
     const dir = query.dir === 'asc' ? 'ASC' : 'DESC';
     const limit = clamp(query.limit ?? 50, 1, 200);
     const offset = Math.max(0, query.offset ?? 0);
+
+    // Primary sort key, then a stable tiebreak by import recency. When sorting by
+    // game date (the default), push rows without a usable date — NULL or an
+    // unknown-year `????.??.??` header — to the bottom in either direction; the
+    // '?' bytes sort above real years, so otherwise undated games would dominate
+    // the default newest-first view.
+    const primaryOrder =
+      sortKey === 'date'
+        ? `(date IS NULL OR date LIKE '?%') ASC, date ${dir}`
+        : `${sortColumn} ${dir}`;
 
     const rows = this.db
       .prepare(
@@ -298,7 +310,7 @@ export class GamesRepository {
                 source, collection_id, has_analysis, created_at
            FROM games
            ${whereSql}
-           ORDER BY ${sortColumn} ${dir}, created_at DESC, rowid DESC
+           ORDER BY ${primaryOrder}, created_at DESC, rowid DESC
            LIMIT @__limit OFFSET @__offset`,
       )
       .all({ ...params, __limit: limit, __offset: offset }) as GameSummaryRow[];

@@ -67,14 +67,16 @@ export interface LibraryState {
 }
 
 export const DEFAULT_LIBRARY_QUERY: LibraryQuery = {
-  sort: "createdAt",
+  // Newest games first by game date — matches the import default of pulling the
+  // most recent games first.
+  sort: "date",
   dir: "desc",
   limit: 25,
   offset: 0,
 };
 
 /**
- * A patch to a filter (anything other than pagination/sort) should send the user
+ * Any change other than the offset itself (a filter or sort) should send the user
  * back to the first page; otherwise the offset can point past the new result set.
  */
 function isPageResetKey(key: string): boolean {
@@ -85,14 +87,14 @@ export const useLibraryStore = create<LibraryState>((set) => ({
   query: { ...DEFAULT_LIBRARY_QUERY },
   setQuery: (patch) =>
     set((s) => {
-      const resetsPage = Object.keys(patch).some(isPageResetKey);
-      return {
-        query: {
-          ...s.query,
-          ...patch,
-          offset: resetsPage && patch.offset === undefined ? 0 : s.query.offset,
-        },
-      };
+      const query = { ...s.query, ...patch };
+      // A filter/sort change returns to page one. A pure pagination patch
+      // ({ offset }) carries its own offset through the spread above — don't
+      // clobber it back to the previous page.
+      if (patch.offset === undefined && Object.keys(patch).some(isPageResetKey)) {
+        query.offset = 0;
+      }
+      return { query };
     }),
   setCollection: (collectionId) =>
     set((s) => ({

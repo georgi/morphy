@@ -3,6 +3,8 @@ import type { Game, EngineEval, MoveEval, ImportEvent } from "@chess/shared";
 import {
   useAnalyzerStore,
   useImportStore,
+  useLibraryStore,
+  DEFAULT_LIBRARY_QUERY,
   currentFen,
   currentNode,
   currentMainlinePly,
@@ -453,5 +455,42 @@ describe("import job progress", () => {
     useImportStore.getState().startJob("job-1", "url");
     useImportStore.getState().clearJob();
     expect(useImportStore.getState().job).toBeNull();
+  });
+});
+
+describe("library query (setQuery)", () => {
+  beforeEach(() => {
+    useLibraryStore.setState({ query: { ...DEFAULT_LIBRARY_QUERY } });
+  });
+
+  it("applies a pagination offset (Next/Prev actually move pages)", () => {
+    const { setQuery } = useLibraryStore.getState();
+    setQuery({ offset: 25 });
+    expect(useLibraryStore.getState().query.offset).toBe(25);
+    setQuery({ offset: 50 });
+    expect(useLibraryStore.getState().query.offset).toBe(50);
+    setQuery({ offset: 25 });
+    expect(useLibraryStore.getState().query.offset).toBe(25);
+  });
+
+  it("resets the offset to 0 when a filter changes", () => {
+    useLibraryStore.getState().setQuery({ offset: 50 });
+    useLibraryStore.getState().setQuery({ q: "carlsen" });
+    expect(useLibraryStore.getState().query.offset).toBe(0);
+    expect(useLibraryStore.getState().query.q).toBe("carlsen");
+  });
+
+  it("resets the offset to 0 when the sort changes", () => {
+    useLibraryStore.getState().setQuery({ offset: 50 });
+    useLibraryStore.getState().setQuery({ sort: "white", dir: "asc" });
+    expect(useLibraryStore.getState().query.offset).toBe(0);
+  });
+
+  it("setCollection switches collection and returns to the first page", () => {
+    useLibraryStore.getState().setQuery({ offset: 50 });
+    useLibraryStore.getState().setCollection("col-1");
+    const { query } = useLibraryStore.getState();
+    expect(query.collectionId).toBe("col-1");
+    expect(query.offset).toBe(0);
   });
 });

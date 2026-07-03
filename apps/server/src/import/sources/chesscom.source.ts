@@ -57,7 +57,10 @@ export class ChessComSource implements GameSource {
         // (`fetchArchives`, above) ends the job as `error`.
         continue;
       }
-      for (const game of archive.games ?? []) {
+      // Chess.com lists a month's games oldest-first; reverse so the most recent
+      // game in the (most recent) month is yielded first.
+      const games = [...(archive.games ?? [])].reverse();
+      for (const game of games) {
         const pgn = game.pgn?.trim();
         if (pgn) yield pgn;
       }
@@ -72,20 +75,27 @@ export class ChessComSource implements GameSource {
   }
 
   /**
-   * Filter the archive URLs by `months`. `'all'` / undefined keeps every archive;
-   * an array keeps archives whose trailing `year/month` matches an entry (either
-   * `YYYY/MM` or `YYYY-MM` form). Results stay in chronological (index) order.
+   * Filter the archive URLs by `months`, then order them most-recent-month-first
+   * so the import starts at the newest games. `'all'` / undefined keeps every
+   * archive; an array keeps archives whose trailing `year/month` matches an entry
+   * (either `YYYY/MM` or `YYYY-MM` form). The index arrives oldest-first, so we
+   * reverse it.
    */
   private selectArchives(
     archives: string[],
     months: string[] | 'all' | undefined,
   ): string[] {
-    if (!months || months === 'all') return archives;
-    const wanted = new Set(months.map((m) => m.replace(/-/g, '/').trim()));
-    return archives.filter((url) => {
-      const suffix = url.split('/').slice(-2).join('/'); // "2024/01"
-      return wanted.has(suffix);
-    });
+    const selected =
+      !months || months === 'all'
+        ? archives
+        : (() => {
+            const wanted = new Set(months.map((m) => m.replace(/-/g, '/').trim()));
+            return archives.filter((url) => {
+              const suffix = url.split('/').slice(-2).join('/'); // "2024/01"
+              return wanted.has(suffix);
+            });
+          })();
+    return selected.slice().reverse();
   }
 
   /** GET + JSON-parse with the required User-Agent and backoff retry. */

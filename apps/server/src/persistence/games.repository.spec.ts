@@ -323,6 +323,31 @@ describe('GamesRepository', () => {
       expect(desc.games.map((g) => g.id)).toEqual(['m', 'k', 'f']);
     });
 
+    it('defaults to game date descending (newest first)', () => {
+      // No sort/dir given: m=2021, k=2004, f=1972 → newest first.
+      expect(repo.searchSummaries().games.map((g) => g.id)).toEqual([
+        'm',
+        'k',
+        'f',
+      ]);
+    });
+
+    it('sinks undated / unknown-year games to the bottom under the date sort', () => {
+      // A row with no date and one with an unknown-year header must not float to
+      // the top despite the '?' bytes sorting above real years.
+      repo.create(gameWith('nodate', { white: 'No', black: 'Date' }), {
+        source: 'manual',
+      });
+      repo.create(
+        gameWith('unknown', { white: 'Un', black: 'Known', date: '????.??.??' }),
+        { source: 'manual' },
+      );
+      const ids = repo.searchSummaries().games.map((g) => g.id);
+      // The three dated games lead in date-desc order; undated rows trail.
+      expect(ids.slice(0, 3)).toEqual(['m', 'k', 'f']);
+      expect(ids.slice(3).sort()).toEqual(['nodate', 'unknown']);
+    });
+
     it('paginates while reporting the full total', () => {
       const first = repo.searchSummaries({
         sort: 'white',
