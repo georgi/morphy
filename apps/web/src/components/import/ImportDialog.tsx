@@ -579,11 +579,17 @@ export function useAnalyzeGame() {
 
   const mutation = useMutation({
     mutationFn: (game: Game) => api.analyzeGame({ game }),
-    onSuccess: (evals: MoveEval[]) => {
+    onSuccess: async (evals: MoveEval[], analyzedGame: Game) => {
       setAnalysis(evals);
       for (const moveEval of evals) {
         setEvalForPly(moveEval.ply, evalForPly(moveEval));
       }
+      // Persist onto the game's IndexedDB record so reopening it from the
+      // library rehydrates the analysis (see `gamesRepo.get` -> `setGame`).
+      // A safe no-op if `analyzedGame` was never imported (e.g. a transient
+      // paste analyzed straight from chat) — `setAnalysis` only writes when a
+      // matching record already exists.
+      await gamesRepo.setAnalysis(analyzedGame.id, evals);
       const flagged = evals.filter(
         (e) =>
           e.classification === "inaccuracy" ||

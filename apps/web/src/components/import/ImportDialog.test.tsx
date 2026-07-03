@@ -4,12 +4,13 @@ import {
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { CatalogEntry, Game } from "@chess/shared";
+import type { CatalogEntry, Game, MoveEval } from "@chess/shared";
 import { resetLibraryDbForTests } from "@/lib/db/library-db";
 import { gamesRepo } from "@/lib/db/games-repo";
 
@@ -45,11 +46,13 @@ vi.mock("@/lib/api", () => ({
   ),
   openImportStream: vi.fn(() => ({ close: vi.fn() })),
   getImportJob: vi.fn(),
+  analyzeGame: vi.fn(),
 }));
 
 import * as api from "@/lib/api";
 const startImport = vi.mocked(api.startImport);
 const importGame = vi.mocked(api.importGame);
+const analyzeGame = vi.mocked(api.analyzeGame);
 
 const SINGLE_START_FEN =
   "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -94,8 +97,8 @@ beforeEach(() => {
   }
 });
 
-import { ImportDialog } from "@/components/import/ImportDialog";
-import { useImportStore } from "@/store";
+import { ImportDialog, useAnalyzeGame } from "@/components/import/ImportDialog";
+import { useAnalyzerStore, useImportStore } from "@/store";
 
 function renderDialog() {
   const queryClient = new QueryClient({
@@ -119,6 +122,7 @@ async function openDialog() {
 afterEach(() => {
   cleanup();
   useImportStore.setState({ job: null });
+  useAnalyzerStore.setState({ game: null, analysis: null });
   vi.unstubAllGlobals();
 });
 
@@ -251,5 +255,86 @@ describe("ImportDialog (single-game 'Load to board' path)", () => {
     expect(await gamesRepo.get("existing")).toBeDefined();
     const page = await gamesRepo.search({});
     expect(page.total).toBe(1);
+  });
+});
+
+describe("useAnalyzeGame", () => {
+  const sampleEvals: MoveEval[] = [
+    {
+      ply: 1,
+      san: "e4",
+      scoreCpBefore: 20,
+      scoreCpAfter: 30,
+      cpLoss: 0,
+      classification: "best",
+      bestMove: "e2e4",
+      bestLine: ["e2e4", "e7e5"],
+    },
+  ];
+
+  beforeEach(() => {
+    analyzeGame.mockReset();
+  });
+
+  /** Mount the hook with the QueryClientProvider `useMutation` needs. */
+  function renderAnalyzeHook() {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    return renderHook(() => useAnalyzeGame(), {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
+      ),
+    });
+  }
+
+  it("persists the returned analysis to the game's IndexedDB record and flips hasAnalysis", async () => {
+    const game = makeGame("g1");
+    await gamesRepo.put(game, {
+      source: "manual",
+      createdAt: 1,
+      contentHash: "hash-analyze-1",
+    });
+    useAnalyzerStore.setState({ game });
+    analyzeGame.mockResolvedValueOnce(sampleEvals);
+
+    const { result } = renderAnalyzeHook();
+    result.current.analyze();
+
+    await waitFor(() => expect(analyzeGame).toHaveBeenCalledTimes(1));
+    expect(analyzeGame).toHaveBeenCalledWith({ game });
+
+    await waitFor(async () => {
+      const stored = await gamesRepo.get("g1");
+      expect(stored?.analysis).toEqual(sampleEvals);
+    });
+    const page = await gamesRepo.search({});
+    expect(page.games.find((g) => g.id === "g1")?.hasAnalysis).toBe(true);
+
+    // The in-memory store updates exactly as before, alongside the IDB write.
+    expect(useAnalyzerStore.getState().analysis).toEqual(sampleEvals);
+  });
+
+  it("analyzing a game that was never imported does not throw and still updates the in-memory store", async () => {
+    // A transient game (e.g. a PGN pasted straight into chat) that never went
+    // through `gamesRepo.put` — there is no IndexedDB record to write onto.
+    const game = makeGame("transient-1");
+    useAnalyzerStore.setState({ game });
+    analyzeGame.mockResolvedValueOnce(sampleEvals);
+
+    const { result } = renderAnalyzeHook();
+    result.current.analyze();
+
+    await waitFor(() =>
+      expect(useAnalyzerStore.getState().analysis).toEqual(sampleEvals),
+    );
+    // No record was created and no error surfaced (an "Analysis failed" toast
+    // would mean `gamesRepo.setAnalysis` threw instead of no-oping).
+    expect(await gamesRepo.get("transient-1")).toBeUndefined();
   });
 });

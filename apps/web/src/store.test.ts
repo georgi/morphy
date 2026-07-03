@@ -250,6 +250,44 @@ describe("setGame", () => {
     expect(s.arrowEvalByFen).toEqual({});
     expect(s.analysis).toEqual(analysis);
   });
+
+  describe("rehydrating a previously-analyzed game from IndexedDB", () => {
+    beforeEach(() => {
+      resetLibraryDbForTests();
+    });
+
+    it("opening a game after gamesRepo.setAnalysis restores its analysis into the store", async () => {
+      const analysis: MoveEval[] = [
+        {
+          ply: 1,
+          san: "e4",
+          scoreCpBefore: 20,
+          scoreCpAfter: 30,
+          cpLoss: 0,
+          classification: "best",
+          bestMove: "e2e4",
+          bestLine: ["e2e4", "e7e5"],
+        },
+      ];
+      const game = makeGame();
+      await gamesRepo.put(game, {
+        source: "manual",
+        createdAt: 1,
+        contentHash: "hash-rehydrate-1",
+      });
+      // Games start with no analysis attached.
+      expect((await gamesRepo.get(game.id))?.analysis).toBeUndefined();
+
+      await gamesRepo.setAnalysis(game.id, analysis);
+
+      // This is the library-open path: `gamesRepo.get(id)` -> `setGame(game)`.
+      const reopened = await gamesRepo.get(game.id);
+      expect(reopened?.analysis).toEqual(analysis);
+
+      useAnalyzerStore.getState().setGame(reopened!);
+      expect(useAnalyzerStore.getState().analysis).toEqual(analysis);
+    });
+  });
 });
 
 describe("best-move arrows state", () => {
