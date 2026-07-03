@@ -1,4 +1,6 @@
 // packages/shared/src/index.ts — the canonical contract, imported by BOTH apps as "@chess/shared"
+export { contentHash, normalizedSanList } from "./content-hash";
+
 export type Color = "w" | "b";
 export type MoveClassification =
   | "best"
