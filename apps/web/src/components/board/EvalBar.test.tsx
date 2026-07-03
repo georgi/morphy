@@ -31,10 +31,13 @@ function makeGame(): Game {
 }
 
 /** The fill `<div>` (first child); its inline `height` encodes the White %. */
-function fillHeightPct(): number {
+function fillEl(): HTMLElement {
   const bar = screen.getByRole("img");
-  const fill = bar.firstElementChild as HTMLElement;
-  return parseFloat(fill.style.height);
+  return bar.firstElementChild as HTMLElement;
+}
+
+function fillHeightPct(): number {
+  return parseFloat(fillEl().style.height);
 }
 
 beforeEach(() => {
@@ -90,6 +93,36 @@ describe("EvalBar White-POV sign", () => {
 
     expect(fillHeightPct()).toBeLessThan(50);
     expect(screen.getByText("−3.0")).toBeTruthy();
+  });
+});
+
+describe("EvalBar board flip", () => {
+  // White ahead (+3.0). White's fill normally pins to the bottom (`mt-auto`); a
+  // flipped board mirrors it to the top (`mb-auto`) so the bar tracks the board.
+  beforeEach(() => {
+    useAnalyzerStore.setState({
+      arrowEvalByFen: { [START_FEN]: evalAt(300) },
+    });
+  });
+
+  it("pins the White fill to the bottom in White orientation", () => {
+    useAnalyzerStore.setState({ orientation: "white" });
+    render(<EvalBar />);
+    const fill = fillEl();
+    expect(fill.className).toContain("mt-auto");
+    expect(fill.className).not.toContain("mb-auto");
+    // White ahead → readout sits over the bottom (white) fill.
+    expect(screen.getByText("+3.0").className).toContain("bottom-0.5");
+  });
+
+  it("mirrors the White fill to the top when the board is flipped", () => {
+    useAnalyzerStore.setState({ orientation: "black" });
+    render(<EvalBar />);
+    const fill = fillEl();
+    expect(fill.className).toContain("mb-auto");
+    expect(fill.className).not.toContain("mt-auto");
+    // White ahead, but flipped → readout follows the fill to the top.
+    expect(screen.getByText("+3.0").className).toContain("top-0.5");
   });
 });
 

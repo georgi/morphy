@@ -11,12 +11,17 @@ import { winProbability, formatScore } from "@/lib/eval";
  * readout (e.g. `+1.4`, `M3`) sits at the top or bottom depending on who stands
  * better.
  *
+ * The bar mirrors the board: White's fill grows from whichever end White's pieces
+ * sit on, so flipping the board (`orientation === "black"`) puts the White fill at
+ * the top. This keeps the bar and the side-to-move visually aligned.
+ *
  * The eval is read from `evalByPly[currentPly]` (the full-game scan); when that
  * is absent — agent variations, manual FEN setups, mid-navigation — it falls
  * back to `arrowEvalByFen[currentFen]`, the same White-POV source that feeds the
  * best-move arrows, so the bar and the #1 arrow always agree.
  */
 export function EvalBar() {
+  const flipped = useAnalyzerStore((s) => s.orientation === "black");
   const currentPly = useAnalyzerStore(currentMainlinePly);
   const evaluation = useAnalyzerStore((s) => {
     const node = currentNode(s);
@@ -51,9 +56,13 @@ export function EvalBar() {
       aria-label={`Engine evaluation ${readout}`}
       title={hasEval ? readout : "No evaluation"}
     >
-      {/* White fill grows from the bottom. */}
+      {/* White fill grows from White's end of the board: bottom normally, top
+          when the board is flipped (`mb-auto` pins it to the top). */}
       <div
-        className="mt-auto w-full transition-[height] duration-200 ease-out [background:var(--eval-white)]"
+        className={
+          (flipped ? "mb-auto" : "mt-auto") +
+          " w-full transition-[height] duration-200 ease-out [background:var(--eval-white)]"
+        }
         style={{ height: `${whitePct}%` }}
       />
       {hasEval && (
@@ -63,9 +72,11 @@ export function EvalBar() {
             // The readout sits over the side that's ahead, tinted to contrast
             // with that fill in either theme: over the light `--eval-white` fill
             // it uses the dark track tone; over the dark track, the white tone.
+            // The fill (and so the readout) tracks board orientation, so the
+            // vertical anchor flips with `flipped`.
             (whiteAdvantage
-              ? "bottom-0.5 [color:var(--eval-track)]"
-              : "top-0.5 [color:var(--eval-white)]")
+              ? (flipped ? "top-0.5" : "bottom-0.5") + " [color:var(--eval-track)]"
+              : (flipped ? "bottom-0.5" : "top-0.5") + " [color:var(--eval-white)]")
           }
         >
           {readout}
