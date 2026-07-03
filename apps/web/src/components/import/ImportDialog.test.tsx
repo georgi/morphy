@@ -9,6 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { CatalogEntry, Game, MoveEval } from "@chess/shared";
 import { resetLibraryDbForTests } from "@/lib/db/library-db";
@@ -124,6 +125,7 @@ afterEach(() => {
   useImportStore.setState({ job: null });
   useAnalyzerStore.setState({ game: null, analysis: null });
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("ImportDialog (download dialog)", () => {
@@ -326,6 +328,8 @@ describe("useAnalyzeGame", () => {
     const game = makeGame("transient-1");
     useAnalyzerStore.setState({ game });
     analyzeGame.mockResolvedValueOnce(sampleEvals);
+    const toastErrorSpy = vi.spyOn(toast, "error");
+    const toastSuccessSpy = vi.spyOn(toast, "success");
 
     const { result } = renderAnalyzeHook();
     result.current.analyze();
@@ -334,7 +338,43 @@ describe("useAnalyzeGame", () => {
       expect(useAnalyzerStore.getState().analysis).toEqual(sampleEvals),
     );
     // No record was created and no error surfaced (an "Analysis failed" toast
-    // would mean `gamesRepo.setAnalysis` threw instead of no-oping).
+    // would mean `gamesRepo.setAnalysis` threw instead of no-oping). Asserting
+    // only the in-memory store would pass even if the persist threw — the
+    // toast spies are what actually prove the no-throw guarantee.
     expect(await gamesRepo.get("transient-1")).toBeUndefined();
+    expect(toastErrorSpy).not.toHaveBeenCalled();
+    expect(toastSuccessSpy).toHaveBeenCalledWith(
+      "Analysis complete",
+      expect.anything(),
+    );
+  });
+
+  it("leaves the in-memory analysis untouched when the IDB persist fails", async () => {
+    // Prove the new ordering: persist-before-memory means a failing
+    // `gamesRepo.setAnalysis` must land the mutation in its error state
+    // *without* the in-memory store ever showing the (unpersisted) analysis.
+    const game = makeGame("g1");
+    await gamesRepo.put(game, {
+      source: "manual",
+      createdAt: 1,
+      contentHash: "hash-analyze-fail",
+    });
+    useAnalyzerStore.setState({ game });
+    analyzeGame.mockResolvedValueOnce(sampleEvals);
+    const setAnalysisSpy = vi
+      .spyOn(gamesRepo, "setAnalysis")
+      .mockRejectedValueOnce(new Error("quota"));
+    const toastErrorSpy = vi.spyOn(toast, "error");
+
+    const { result } = renderAnalyzeHook();
+    result.current.analyze();
+
+    await waitFor(() => expect(toastErrorSpy).toHaveBeenCalledTimes(1));
+    expect(toastErrorSpy).toHaveBeenCalledWith(
+      "Analysis failed",
+      expect.anything(),
+    );
+    expect(setAnalysisSpy).toHaveBeenCalledTimes(1);
+    expect(useAnalyzerStore.getState().analysis).toBeNull();
   });
 });
