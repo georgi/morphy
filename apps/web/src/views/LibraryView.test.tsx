@@ -210,6 +210,43 @@ describe("LibraryView", () => {
     ]);
   });
 
+  it("deleting a collection cascades to its member games", async () => {
+    const collection: Collection = {
+      id: "c1",
+      name: "Sicilians",
+      source: "lichess",
+      gameCount: 2,
+      createdAt: 1,
+    };
+    await collectionsRepo.put(collection);
+    await seedGame(
+      "member-1",
+      { white: "Member One", date: "2021.01.01" },
+      { collectionId: "c1" },
+    );
+    await seedGame(
+      "member-2",
+      { white: "Member Two", date: "2021.01.02" },
+      { collectionId: "c1" },
+    );
+    await seedGame("solo", { white: "Solo Player", date: "2021.01.03" });
+
+    renderView();
+    await screen.findByText("Member One");
+    expect(screen.getByText("Member Two")).toBeDefined();
+    expect(screen.getByText("Solo Player")).toBeDefined();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete collection Sicilians" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText("Member One")).toBeNull();
+    });
+    expect(screen.queryByText("Member Two")).toBeNull();
+    expect(screen.getByText("Solo Player")).toBeDefined();
+  });
+
   it("paginates: shows a page of results and advances on Next", async () => {
     for (let i = 0; i < 30; i++) {
       // Descending date strings sort "game-29" first (newest).

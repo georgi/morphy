@@ -95,6 +95,19 @@ async function del(id: string): Promise<boolean> {
   return true;
 }
 
+/** Remove every game in a collection; returns how many were deleted (cascade). */
+async function deleteByCollection(collectionId: string): Promise<number> {
+  const db = await libraryDb();
+  const keys = await db.getAllKeysFromIndex(
+    "games",
+    "by-collection",
+    collectionId,
+  );
+  const tx = db.transaction("games", "readwrite");
+  await Promise.all([...keys.map((key) => tx.store.delete(key)), tx.done]);
+  return keys.length;
+}
+
 /** All stored games, oldest first (by `createdAt`). */
 async function list(): Promise<Game[]> {
   const db = await libraryDb();
@@ -109,5 +122,6 @@ export const gamesRepo = {
   search,
   setAnalysis,
   delete: del,
+  deleteByCollection,
   list,
 };

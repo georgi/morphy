@@ -140,4 +140,25 @@ describe("gamesRepo", () => {
     const page = await gamesRepo.search({ collectionId: "col-1" });
     expect(page.games.map((g) => g.id)).toEqual(["g1"]);
   });
+
+  it("deleteByCollection cascades and returns the count", async () => {
+    await gamesRepo.put(
+      makeGame("a"),
+      makeMeta({ collectionId: "c1", contentHash: "ha" }),
+    );
+    await gamesRepo.put(
+      makeGame("b"),
+      makeMeta({ collectionId: "c1", contentHash: "hb" }),
+    );
+    await gamesRepo.put(
+      makeGame("c"),
+      makeMeta({ collectionId: "c2", contentHash: "hc" }),
+    );
+    await gamesRepo.put(makeGame("d"), makeMeta({ contentHash: "hd" }));
+
+    expect(await gamesRepo.deleteByCollection("c1")).toBe(2);
+
+    const remaining = (await gamesRepo.list()).map((g) => g.id);
+    expect(remaining.sort()).toEqual(["c", "d"]);
+  });
 });

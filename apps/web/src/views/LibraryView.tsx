@@ -59,7 +59,10 @@ function CollectionsSidebar({
 }) {
   const queryClient = useQueryClient();
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => collectionsRepo.delete(id),
+    mutationFn: async (id: string) => {
+      await gamesRepo.deleteByCollection(id);
+      return collectionsRepo.delete(id);
+    },
     onSuccess: (_data, id) => {
       if (activeId === id) onSelect(undefined);
       void queryClient.invalidateQueries({ queryKey: ["collections"] });
