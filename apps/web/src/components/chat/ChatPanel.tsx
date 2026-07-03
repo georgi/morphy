@@ -13,6 +13,7 @@ import {
   type ChatToolEvent,
 } from "@/store";
 import * as api from "@/lib/api";
+import { ModelPicker } from "./ModelPicker";
 
 const QUICK_PROMPTS = [
   "What did I do wrong?",
@@ -28,11 +29,15 @@ const QUICK_PROMPTS = [
 export function ChatPanel() {
   const chat = useAnalyzerStore((s) => s.chat);
   const streaming = useAnalyzerStore((s) => s.streaming);
+  const sessionId = useAnalyzerStore((s) => s.sessionId);
   const [draft, setDraft] = useState("");
 
   const viewportRef = useRef<HTMLDivElement>(null);
 
-  // Open the agent SSE stream once and translate AgentEvents into store actions.
+  // Open the agent SSE stream and translate AgentEvents into store actions. The
+  // effect re-keys on `sessionId`, which `setModel`/`newChat`/`continueSession`
+  // rotate — so switching model or starting a fresh chat reopens the stream with
+  // the current `?model=`/`?resume=`.
   useEffect(() => {
     const onEvent = (e: AgentEvent) => {
       const store = useAnalyzerStore.getState();
@@ -65,10 +70,11 @@ export function ChatPanel() {
       }
     };
 
-    const source = api.openAgentStream(
-      useAnalyzerStore.getState().sessionId,
-      onEvent,
-    );
+    const { model, resumeId } = useAnalyzerStore.getState();
+    const source = api.openAgentStream(sessionId, onEvent, {
+      model,
+      resume: resumeId,
+    });
     source.onerror = () => {
       // The browser auto-reconnects EventSource; surface a hint without tearing
       // down the stream so an in-flight reply can resume.
@@ -79,7 +85,7 @@ export function ChatPanel() {
     };
 
     return () => source.close();
-  }, []);
+  }, [sessionId]);
 
   // Auto-scroll the transcript to the newest content as it streams in.
   useEffect(() => {
@@ -131,6 +137,10 @@ export function ChatPanel() {
 
   return (
     <div className="flex h-full flex-col">
+      <div className="flex items-center border-b px-2 py-1.5">
+        <ModelPicker />
+      </div>
+
       <div ref={viewportRef} className="min-h-0 flex-1">
         <ScrollArea className="h-full">
           <div className="flex flex-col gap-4 p-3">

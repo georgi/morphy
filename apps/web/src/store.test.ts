@@ -348,6 +348,37 @@ describe("chat / streaming reducers", () => {
   });
 });
 
+describe("model selection", () => {
+  it("setModel selects the model and starts a fresh chat", () => {
+    useAnalyzerStore.getState().appendUserMessage("stale turn");
+    useAnalyzerStore.setState({ resumeId: "sdk-1", currentSessionId: "sdk-1" });
+    const before = useAnalyzerStore.getState().sessionId;
+
+    useAnalyzerStore.getState().setModel("gpt-5.4");
+
+    const s = useAnalyzerStore.getState();
+    expect(s.model).toBe("gpt-5.4");
+    expect(s.chat).toEqual([]);
+    expect(s.resumeId).toBeUndefined();
+    expect(s.currentSessionId).toBeUndefined();
+    // A new connection id re-keys the ChatPanel effect → the stream reopens.
+    expect(s.sessionId).not.toBe(before);
+  });
+
+  it("newChat clears the transcript but keeps the selected model", () => {
+    useAnalyzerStore.getState().setModel("gpt-5.4");
+    useAnalyzerStore.getState().appendUserMessage("hi");
+    const before = useAnalyzerStore.getState().sessionId;
+
+    useAnalyzerStore.getState().newChat();
+
+    const s = useAnalyzerStore.getState();
+    expect(s.model).toBe("gpt-5.4");
+    expect(s.chat).toEqual([]);
+    expect(s.sessionId).not.toBe(before);
+  });
+});
+
 describe("import job progress", () => {
   beforeEach(() => {
     useImportStore.setState({ job: null });
