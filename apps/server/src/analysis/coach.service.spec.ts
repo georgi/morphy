@@ -245,7 +245,7 @@ describe('CoachService', () => {
 
       // Make Black's 3...Nf6 (ply 6) walk into a position winning for White.
       const engine = fakeEngine(game.moves[5].fenAfter);
-      const analysis = new AnalysisService(engine, chess, store);
+      const analysis = new AnalysisService(engine, chess);
       const coach = new CoachService(chess, store, analysis);
 
       const points = await coach.computeTurningPoints(game.id);
@@ -280,7 +280,7 @@ describe('CoachService', () => {
       const cached = new CachedEngine(engine, new EvalCacheRepository(db));
       chess = new ChessService();
       store = new GameStore();
-      const analysis = new AnalysisService(cached, chess, store);
+      const analysis = new AnalysisService(cached, chess);
       coach = new CoachService(chess, store, analysis);
       hasEngine = await stockfishAvailable(engine);
     }, 30_000);

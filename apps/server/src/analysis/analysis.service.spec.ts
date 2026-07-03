@@ -10,7 +10,6 @@ import { EngineUnavailableError } from '../engine/errors';
 import { EvalCacheRepository } from '../persistence/eval-cache.repository';
 import { openDatabase, type Db } from '../persistence/database';
 import { ChessService } from '../chess/chess.service';
-import { GameStore } from '../chess/game.store';
 
 // White to move, queen on h5 attacked by the g6 pawn (1.e4 e5 2.Qh5 Nc6 3.Bc4 g6).
 // The engine's best is a quiet retreat (Qf3); a "natural" queen move like Qf5
@@ -46,7 +45,7 @@ describe('AnalysisService', () => {
       db = openDatabase(':memory:');
       const cached = new CachedEngine(engine, new EvalCacheRepository(db));
       hasEngine = await stockfishAvailable(engine);
-      service = new AnalysisService(cached, new ChessService(), new GameStore());
+      service = new AnalysisService(cached, new ChessService());
     }, 30_000);
 
     afterAll(async () => {
@@ -107,17 +106,15 @@ describe('AnalysisService', () => {
       return { analyze } as unknown as CachedEngine;
     }
 
-    it('builds one MoveEval per ply and caches the curve on the game', async () => {
+    it('builds one MoveEval per ply off the game sent by value', async () => {
       const chess = new ChessService();
-      const store = new GameStore();
       const engine = fakeEngine();
-      const service = new AnalysisService(engine, chess, store);
+      const service = new AnalysisService(engine, chess);
 
       const game = chess.importPgn('1. e4 e5 2. Bc4 Nc6 3. Qh5 Nf6 4. Qxf7# 1-0');
-      store.create(game);
       expect(game.moves.length).toBe(7);
 
-      const curve = await service.analyzeGame(game.id, 12);
+      const curve = await service.analyzeGame(game, 12);
 
       expect(curve).toHaveLength(game.moves.length);
       expect(curve.map((e) => e.ply)).toEqual(
@@ -125,21 +122,22 @@ describe('AnalysisService', () => {
       );
       expect(curve.map((e) => e.san)).toEqual(game.moves.map((m) => m.san));
 
-      // The curve is cached back onto the stored game.
-      expect(store.get(game.id)?.analysis).toEqual(curve);
+      // By-value: nothing is written back onto `game` — the caller owns caching.
+      expect(game.analysis).toBeUndefined();
       // One eval-before + one eval-after per ply.
       expect((engine.analyze as jest.Mock)).toHaveBeenCalledTimes(
         game.moves.length * 2,
       );
     });
 
-    it('throws when the game id is unknown', async () => {
-      const service = new AnalysisService(
-        fakeEngine(),
-        new ChessService(),
-        new GameStore(),
+    it('returns [] for a game with no moves', async () => {
+      const chess = new ChessService();
+      const service = new AnalysisService(fakeEngine(), chess);
+
+      const game = chess.importFen(
+        'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
       );
-      await expect(service.analyzeGame('nope')).rejects.toThrow(/not found/i);
+      expect(await service.analyzeGame(game)).toEqual([]);
     });
   });
 
@@ -178,11 +176,7 @@ describe('AnalysisService', () => {
         [startFen, 0],
         [afterFen, 400],
       ]);
-      const service = new AnalysisService(
-        scriptedEngine(scores),
-        chess,
-        new GameStore(),
-      );
+      const service = new AnalysisService(scriptedEngine(scores), chess);
 
       const result = await service.evaluateMove(startFen, 'a5');
       expect(new Chess(startFen).turn()).toBe('b');
@@ -206,7 +200,7 @@ describe('AnalysisService', () => {
           }),
       );
       const engine = { analyze } as unknown as CachedEngine;
-      const service = new AnalysisService(engine, chess, new GameStore());
+      const service = new AnalysisService(engine, chess);
 
       const startFen = new Chess().fen();
       const line = ['e4', 'e5', 'Nf3'];

@@ -211,11 +211,11 @@ export interface AnalyzePositionRequest {
   multipv?: number;
 }
 export interface AnalyzeGameRequest {
-  gameId: string;
+  game: Game;
   depth?: number;
 }
 export interface KeyMomentsRequest {
-  gameId: string;
+  game: Game;
 }
 export interface AgentMessageRequest {
   text: string;

@@ -128,7 +128,7 @@ describe('REST API (e2e)', () => {
   });
 
   describe('POST /analysis/game', () => {
-    it('analyzes a stored game', async () => {
+    it('analyzes a game sent by value', async () => {
       const imported = await request(app.getHttpServer())
         .post('/games')
         .send({ pgn: '1. e4 e5 *' })
@@ -136,7 +136,7 @@ describe('REST API (e2e)', () => {
 
       const res = await request(app.getHttpServer())
         .post('/analysis/game')
-        .send({ gameId: imported.body.id })
+        .send({ game: imported.body })
         .expect(201);
 
       expect(Array.isArray(res.body)).toBe(true);
@@ -144,11 +144,34 @@ describe('REST API (e2e)', () => {
       expect(res.body[0]).toHaveProperty('classification');
     });
 
-    it('returns 404 for an unknown gameId', async () => {
+    it('rejects a missing game (400, not 404)', async () => {
       await request(app.getHttpServer())
         .post('/analysis/game')
-        .send({ gameId: 'nope' })
-        .expect(404);
+        .send({})
+        .expect(400);
+    });
+  });
+
+  describe('POST /analysis/key-moments', () => {
+    it('returns [] for a game with no analysis attached', async () => {
+      const imported = await request(app.getHttpServer())
+        .post('/games')
+        .send({ pgn: '1. e4 e5 *' })
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .post('/analysis/key-moments')
+        .send({ game: imported.body })
+        .expect(201);
+
+      expect(res.body).toEqual([]);
+    });
+
+    it('rejects a missing game (400, not 404)', async () => {
+      await request(app.getHttpServer())
+        .post('/analysis/key-moments')
+        .send({})
+        .expect(400);
     });
   });
 });

@@ -10,6 +10,7 @@ import {
 import { toast } from "sonner";
 import type {
   EngineEval,
+  Game,
   MoveEval,
   StartImportRequest,
   CatalogEntry,
@@ -128,9 +129,9 @@ export function ImportDialog() {
   const [pgn, setPgn] = useState("");
   const [collectionName, setCollectionName] = useState("");
   // Lichess tab.
-  const [lichessKind, setLichessKind] = useState<"user" | "study" | "broadcast">(
-    "user",
-  );
+  const [lichessKind, setLichessKind] = useState<
+    "user" | "study" | "broadcast"
+  >("user");
   const [lichessId, setLichessId] = useState("");
   const [lichessMax, setLichessMax] = useState("");
   // Chess.com tab.
@@ -560,7 +561,7 @@ export function useAnalyzeGame() {
   const setEvalForPly = useAnalyzerStore((s) => s.setEvalForPly);
 
   const mutation = useMutation({
-    mutationFn: (gameId: string) => api.analyzeGame({ gameId }),
+    mutationFn: (game: Game) => api.analyzeGame({ game }),
     onSuccess: (evals: MoveEval[]) => {
       setAnalysis(evals);
       for (const moveEval of evals) {
@@ -591,7 +592,7 @@ export function useAnalyzeGame() {
       });
       return;
     }
-    mutation.mutate(game.id);
+    mutation.mutate(game);
   };
 
   return {

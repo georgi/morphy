@@ -1,7 +1,6 @@
 import type { MoveEval } from "@chess/shared";
 import { KeyMomentsService } from "./key-moments.service";
 import { ChessService } from "../chess/chess.service";
-import { GameStore } from "../chess/game.store";
 
 // Morphy's Opera Game — a long, real game so every ply referenced below resolves
 // to a legal move/position (select() converts the engine best move to SAN).
@@ -41,18 +40,15 @@ function moveEvalFor(
 
 describe("KeyMomentsService.select (pure, no engine/agent)", () => {
   let chess: ChessService;
-  let store: GameStore;
   let service: KeyMomentsService;
 
   beforeEach(() => {
     chess = new ChessService();
-    store = new GameStore();
-    service = new KeyMomentsService(chess, store);
+    service = new KeyMomentsService(chess);
   });
 
   it("ranks by severity then cp-loss, returns in ply order, ignores non-errors", () => {
     const game = chess.importPgn(OPERA_GAME_PGN);
-    store.create(game);
 
     const analysis: MoveEval[] = [
       moveEvalFor(game, 2, 10, "good"), // ignored (good)
@@ -61,7 +57,6 @@ describe("KeyMomentsService.select (pure, no engine/agent)", () => {
       moveEvalFor(game, 8, 150, "mistake"),
       moveEvalFor(game, 12, 250, "mistake"),
     ];
-    store.setAnalysis(game.id, analysis);
 
     const moments = service.select(analysis, game);
 
@@ -77,7 +72,6 @@ describe("KeyMomentsService.select (pure, no engine/agent)", () => {
 
   it("orders selection by severity before cp-loss (blunder beats a bigger-swing mistake)", () => {
     const game = chess.importPgn(OPERA_GAME_PGN);
-    store.create(game);
 
     // A mistake with a larger cp-loss than the blunder. Severity wins the slot
     // race, but with a cap above the candidate count both are returned anyway —
@@ -91,7 +85,6 @@ describe("KeyMomentsService.select (pure, no engine/agent)", () => {
       moveEvalFor(game, 12, 99, "inaccuracy"),
       moveEvalFor(game, 14, 310, "blunder"), // lowest cp-loss of the errors, but…
     ];
-    store.setAnalysis(game.id, analysis);
 
     const moments = service.select(analysis, game);
 
@@ -104,14 +97,12 @@ describe("KeyMomentsService.select (pure, no engine/agent)", () => {
 
   it("flags the single biggest swing (max cp-loss) as the turning point", () => {
     const game = chess.importPgn(OPERA_GAME_PGN);
-    store.create(game);
 
     const analysis: MoveEval[] = [
       moveEvalFor(game, 4, 120, "mistake"),
       moveEvalFor(game, 8, 900, "blunder"), // biggest swing → turning point
       moveEvalFor(game, 12, 350, "blunder"),
     ];
-    store.setAnalysis(game.id, analysis);
 
     const moments = service.select(analysis, game);
     const turning = moments.filter((m) => m.isTurningPoint);
@@ -122,7 +113,6 @@ describe("KeyMomentsService.select (pure, no engine/agent)", () => {
 
   it("caps at five even when more moves are flagged", () => {
     const game = chess.importPgn(OPERA_GAME_PGN);
-    store.create(game);
 
     const analysis: MoveEval[] = [
       moveEvalFor(game, 4, 800, "blunder"),
@@ -132,7 +122,6 @@ describe("KeyMomentsService.select (pure, no engine/agent)", () => {
       moveEvalFor(game, 12, 400, "blunder"),
       moveEvalFor(game, 14, 350, "blunder"), // sixth — dropped (smallest swing)
     ];
-    store.setAnalysis(game.id, analysis);
 
     const moments = service.select(analysis, game);
 
@@ -145,12 +134,10 @@ describe("KeyMomentsService.select (pure, no engine/agent)", () => {
 
   it("builds a templated description with classification, swing and the better move", () => {
     const game = chess.importPgn(OPERA_GAME_PGN);
-    store.create(game);
 
     // Ply 6 is Black to move (3...dxe5 in this line); d8e7 (Qe7) is legal there,
     // so the better-move conversion to SAN succeeds.
     const analysis: MoveEval[] = [moveEvalFor(game, 6, 150, "mistake", "d8e7")];
-    store.setAnalysis(game.id, analysis);
 
     const [moment] = service.select(analysis, game);
 
@@ -166,14 +153,12 @@ describe("KeyMomentsService.select (pure, no engine/agent)", () => {
 
   it("falls back gracefully when no better move is known", () => {
     const game = chess.importPgn(OPERA_GAME_PGN);
-    store.create(game);
 
     const noBest: MoveEval = {
       ...moveEvalFor(game, 6, 320, "blunder"),
       bestMove: null,
       bestLine: [],
     };
-    store.setAnalysis(game.id, [noBest]);
 
     const [moment] = service.select([noBest], game);
     expect(moment.description).toBe(
@@ -183,37 +168,32 @@ describe("KeyMomentsService.select (pure, no engine/agent)", () => {
 
   it("returns [] when nothing is flagged", () => {
     const game = chess.importPgn(SCHOLARS_MATE_PGN);
-    store.create(game);
 
     const analysis: MoveEval[] = [
       moveEvalFor(game, 1, 5, "good"),
       moveEvalFor(game, 2, 5, "good"),
     ];
-    store.setAnalysis(game.id, analysis);
 
     expect(service.select(analysis, game)).toEqual([]);
   });
 });
 
-describe("KeyMomentsService.forGame (no engine/agent)", () => {
+describe("KeyMomentsService.forGame (by-value, no engine/agent)", () => {
   let chess: ChessService;
-  let store: GameStore;
   let service: KeyMomentsService;
 
   beforeEach(() => {
     chess = new ChessService();
-    store = new GameStore();
-    service = new KeyMomentsService(chess, store);
+    service = new KeyMomentsService(chess);
   });
 
-  it("throws for an unknown game", async () => {
-    await expect(service.forGame("nope")).rejects.toThrow(/not found/i);
-  });
-
-  it("returns [] for a game with no cached analysis", async () => {
+  it("returns [] for a game with no analysis attached", async () => {
     const game = chess.importPgn(SCHOLARS_MATE_PGN);
-    store.create(game);
-    // No setAnalysis → unanalyzed.
-    expect(await service.forGame(game.id)).toEqual([]);
+    expect(await service.forGame(game)).toEqual([]);
+  });
+
+  it("returns [] for a game with an empty analysis array", async () => {
+    const game = chess.importPgn(SCHOLARS_MATE_PGN);
+    expect(await service.forGame({ ...game, analysis: [] })).toEqual([]);
   });
 });

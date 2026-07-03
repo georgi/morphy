@@ -1,10 +1,9 @@
 import { Injectable } from "@nestjs/common";
 import { Chess } from "chess.js";
-import type { EngineEval, MoveEval } from "@chess/shared";
+import type { EngineEval, Game, MoveEval } from "@chess/shared";
 import type { AnalyzeOptions } from "../engine/engine.service";
 import { CachedEngine } from "../engine/cached-engine";
 import { ChessService } from "../chess/chess.service";
-import { GameStore } from "../chess/game.store";
 
 /**
  * Centipawn magnitude used to score a mate-in-N when reducing it to a single
@@ -23,7 +22,6 @@ export class AnalysisService {
   constructor(
     private readonly engine: CachedEngine,
     private readonly chess: ChessService,
-    private readonly store: GameStore,
   ) {}
 
   /**
@@ -83,21 +81,14 @@ export class AnalysisService {
   }
 
   /**
-   * Analyze every ply of a stored game, building the eval curve. Runs each ply
-   * through the engine sequentially (the engine serializes internally anyway),
-   * caches the result on the game via the store, and returns it.
-   *
-   * @throws Error if no game with `gameId` is stored.
+   * Analyze every ply of a game (sent by value), building the eval curve. Runs
+   * each ply through the engine sequentially (the engine serializes internally
+   * anyway) and returns the curve — the caller owns persisting it, if at all.
    */
   async analyzeGame(
-    gameId: string,
+    game: Game,
     depth = DEFAULT_GAME_DEPTH,
   ): Promise<MoveEval[]> {
-    const game = this.store.get(gameId);
-    if (!game) {
-      throw new Error(`Game not found: ${gameId}`);
-    }
-
     const opts: AnalyzeOptions = { depth };
     const evals: MoveEval[] = [];
     for (const move of game.moves) {
@@ -106,7 +97,6 @@ export class AnalysisService {
       evals.push({ ...moveEval, ply: move.ply });
     }
 
-    this.store.setAnalysis(gameId, evals);
     return evals;
   }
 

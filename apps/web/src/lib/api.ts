@@ -7,6 +7,7 @@ import type {
   ImportGameRequest,
   AnalyzePositionRequest,
   AnalyzeGameRequest,
+  KeyMomentsRequest,
   AgentMessageRequest,
   AgentEvent,
   Collection,
@@ -90,13 +91,14 @@ export function analyzeGame(body: AnalyzeGameRequest): Promise<MoveEval[]> {
 
 /**
  * Surface a game's decisive moments (inaccuracies/mistakes/blunders, capped, with
- * the turning point flagged) for the review panel. Returns `[]` when the game has
- * no analysis yet, so the caller can show an "analyze to see key moments" state.
+ * the turning point flagged) for the review panel. By-value: send the game with
+ * its analysis attached. Returns `[]` when the game has no analysis yet, so the
+ * caller can show an "analyze to see key moments" state.
  */
-export function keyMoments(gameId: string): Promise<KeyMoment[]> {
+export function keyMoments(body: KeyMomentsRequest): Promise<KeyMoment[]> {
   return request<KeyMoment[]>("/analysis/key-moments", {
     method: "POST",
-    body: JSON.stringify({ gameId }),
+    body: JSON.stringify(body),
   });
 }
 

@@ -295,8 +295,8 @@ export class ChessToolsService {
       label: 'Analyze Game',
       description:
         'Scan every move of a stored game with the engine, building the eval ' +
-        'curve and flagging inaccuracies, mistakes, and blunders. Results are ' +
-        'cached on the game. Omit gameId to use the current game.',
+        'curve and flagging inaccuracies, mistakes, and blunders. Omit gameId ' +
+        'to use the current game.',
       parameters: Type.Object({
         gameId: Type.Optional(
           Type.String({
@@ -309,10 +309,11 @@ export class ChessToolsService {
         if (!gameId) {
           return this.errorResult('No game to analyze. Load a game first.');
         }
-        if (!this.store.has(gameId)) {
+        const game = this.store.get(gameId);
+        if (!game) {
           return this.errorResult(`Game not found: ${gameId}.`);
         }
-        const evals = await this.analysis.analyzeGame(gameId);
+        const evals = await this.analysis.analyzeGame(game);
         const flagged = evals.filter((e) =>
           ['inaccuracy', 'mistake', 'blunder'].includes(e.classification),
         );

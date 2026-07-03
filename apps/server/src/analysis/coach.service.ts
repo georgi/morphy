@@ -50,7 +50,11 @@ export class CoachService {
     }
 
     const max = opts.max ?? DEFAULT_MAX_TURNING_POINTS;
-    const evals = game.analysis ?? (await this.analysis.analyzeGame(gameId));
+    // The agent still operates by-id (full migration is a later task): resolve
+    // the game once above, run the by-value analysis here if it isn't cached
+    // yet, then cache it back onto the store so a later call (e.g. a second
+    // review in the same session) reuses it instead of re-scanning.
+    const evals = game.analysis ?? (await this.analyzeAndCache(game));
 
     const selected = evals
       .filter((e) => TURNING_POINT_CLASSES.has(e.classification))
@@ -66,6 +70,13 @@ export class CoachService {
   }
 
   // ── internals ──────────────────────────────────────────────────────────────
+
+  /** Run the by-value engine scan for `game` and cache the curve back onto the store. */
+  private async analyzeAndCache(game: Game): Promise<MoveEval[]> {
+    const evals = await this.analysis.analyzeGame(game);
+    this.store.setAnalysis(game.id, evals);
+    return evals;
+  }
 
   private toTurningPoint(
     game: Game,

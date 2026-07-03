@@ -8,7 +8,6 @@ import type {
   MoveEval,
 } from "@chess/shared";
 import { ChessService } from "../chess/chess.service";
-import { GameStore } from "../chess/game.store";
 
 /** How many key moments to surface at most — keep the review focused (PRODUCT §5). */
 const MAX_KEY_MOMENTS = 5;
@@ -72,10 +71,7 @@ Use the same ply numbers you were given. Do not add, drop, or reorder entries.`;
 export class KeyMomentsService {
   private readonly logger = new Logger(KeyMomentsService.name);
 
-  constructor(
-    private readonly chess: ChessService,
-    private readonly store: GameStore,
-  ) {}
+  constructor(private readonly chess: ChessService) {}
 
   /**
    * Pick up to five decisive moments from a game's eval curve, newest analysis
@@ -112,22 +108,15 @@ export class KeyMomentsService {
   }
 
   /**
-   * Key moments for a stored game, with coach prose merged in when the agent is
-   * reachable. Loads the game and its cached analysis (attached by
-   * {@link AnalysisService.analyzeGame}); an unknown game throws, an unanalyzed
-   * game yields `[]` so the client can show an "analyze to see key moments" state.
+   * Key moments for a game sent by value, with coach prose merged in when the
+   * agent is reachable. Reads the analysis attached to `game` (the client owns
+   * running/caching it); an unanalyzed game (`game.analysis` empty/absent)
+   * yields `[]` so the client can show an "analyze to see key moments" state.
    *
    * Enrichment is strictly best-effort: any failure (missing credentials, agent
    * error, timeout, malformed JSON) leaves the templated descriptions in place.
-   *
-   * @throws NotFoundError-shaped Error (mapped to 404 by the controller) when no
-   *   game with `gameId` is stored.
    */
-  async forGame(gameId: string): Promise<KeyMoment[]> {
-    const game = this.store.get(gameId);
-    if (!game) {
-      throw new Error(`Game not found: ${gameId}`);
-    }
+  async forGame(game: Game): Promise<KeyMoment[]> {
     if (!game.analysis || game.analysis.length === 0) {
       return [];
     }

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import type { KeyMoment, MoveClassification } from "@chess/shared";
+import type { Game, KeyMoment, MoveClassification } from "@chess/shared";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAnalyzerStore } from "@/store";
 import { cn } from "@/lib/utils";
@@ -140,20 +140,26 @@ function MomentSkeleton() {
  * navigates the board to that ply.
  */
 export function KeyMoments() {
-  const gameId = useAnalyzerStore((s) => s.game?.id);
+  const game = useAnalyzerStore((s) => s.game);
   const analysis = useAnalyzerStore((s) => s.analysis);
   const gotoPly = useAnalyzerStore((s) => s.gotoPly);
 
   const hasAnalysis = Boolean(analysis && analysis.length > 0);
 
   const { data, isPending } = useQuery({
-    queryKey: ["key-moments", gameId],
-    queryFn: () => api.keyMoments(gameId as string),
-    enabled: Boolean(gameId) && hasAnalysis,
+    queryKey: ["key-moments", game?.id, analysis],
+    // By-value: the store tracks the freshest analysis separately from `game`
+    // (it doesn't get written back onto `game.analysis`), so merge it in here —
+    // the server reads `game.analysis` to build the moments.
+    queryFn: () =>
+      api.keyMoments({
+        game: { ...(game as Game), analysis: analysis ?? undefined },
+      }),
+    enabled: Boolean(game) && hasAnalysis,
   });
 
   // Nothing to review until a game is loaded.
-  if (!gameId) return null;
+  if (!game) return null;
 
   // No analysis yet — invite the user to run it (matches the server's `[]` state).
   if (!hasAnalysis) {

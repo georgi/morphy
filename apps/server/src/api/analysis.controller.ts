@@ -1,34 +1,30 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  NotFoundException,
-  Post,
-} from "@nestjs/common";
+import { BadRequestException, Body, Controller, Post } from "@nestjs/common";
 import type {
   AnalyzeGameRequest,
   AnalyzePositionRequest,
   EngineEval,
+  Game,
   KeyMoment,
   KeyMomentsRequest,
   MoveEval,
 } from "@chess/shared";
 import { AnalysisService } from "../analysis/analysis.service";
 import { KeyMomentsService } from "../analysis/key-moments.service";
-import { GameStore } from "../chess/game.store";
 
 /**
  * Direct (non-agent) analysis endpoints. Both delegate to AnalysisService — the
  * same service the agent tools call — so there's a single source of truth. A
  * missing Stockfish binary bubbles up as EngineUnavailableError and is mapped to
- * HTTP 503 by the engine exception filter.
+ * HTTP 503 by the engine exception filter. `/game` and `/key-moments` are
+ * by-value: the client sends the `Game` in the body and owns persisting the
+ * result — there is no server-side game lookup, so a missing/empty game is a
+ * 400 (validation), never a 404.
  */
 @Controller("analysis")
 export class AnalysisController {
   constructor(
     private readonly analysis: AnalysisService,
     private readonly keyMoments: KeyMomentsService,
-    private readonly store: GameStore,
   ) {}
 
   /** Engine evaluation of a single position. Invalid FEN → 400 (via ChessService). */
@@ -45,36 +41,34 @@ export class AnalysisController {
   }
 
   /**
-   * Full-game scan: evaluate every ply, returning the eval curve. The result is
-   * cached on the game by the service. Unknown gameId → 404.
+   * Full-game scan: evaluate every ply of the game sent in the body, returning
+   * the eval curve. By-value — the client owns caching the result (there is no
+   * server-side store write). Missing/empty game → 400.
    */
   @Post("game")
   analyzeGame(@Body() body: AnalyzeGameRequest): Promise<MoveEval[]> {
-    const gameId = typeof body?.gameId === "string" ? body.gameId.trim() : "";
-    if (!gameId) {
-      throw new BadRequestException('Provide a "gameId" to analyze.');
-    }
-    if (!this.store.has(gameId)) {
-      throw new NotFoundException(`Game not found: ${gameId}`);
-    }
-    return this.analysis.analyzeGame(gameId, body.depth);
+    const game = requireGame(body?.game, 'Provide a "game" to analyze.');
+    return this.analysis.analyzeGame(game, body.depth);
   }
 
   /**
-   * Decisive moments of a stored game (up to five), each with a White-POV eval
-   * and a coaching note — agent prose when the agent is reachable, a templated
-   * fallback otherwise. Unknown gameId → 404; an unanalyzed game returns `[]` so
-   * the client can prompt the user to analyze first.
+   * Decisive moments of the game sent in the body (up to five), each with a
+   * White-POV eval and a coaching note — agent prose when the agent is
+   * reachable, a templated fallback otherwise. Missing/empty game → 400; a game
+   * with no `analysis` attached returns `[]` so the client can prompt the user
+   * to analyze first.
    */
   @Post("key-moments")
   keyMomentsForGame(@Body() body: KeyMomentsRequest): Promise<KeyMoment[]> {
-    const gameId = typeof body?.gameId === "string" ? body.gameId.trim() : "";
-    if (!gameId) {
-      throw new BadRequestException('Provide a "gameId" to review.');
-    }
-    if (!this.store.has(gameId)) {
-      throw new NotFoundException(`Game not found: ${gameId}`);
-    }
-    return this.keyMoments.forGame(gameId);
+    const game = requireGame(body?.game, 'Provide a "game" to review.');
+    return this.keyMoments.forGame(game);
   }
+}
+
+/** Validate a by-value `Game` from a request body, or 400. */
+function requireGame(game: Game | undefined | null, message: string): Game {
+  if (!game || !game.id || !Array.isArray(game.moves)) {
+    throw new BadRequestException(message);
+  }
+  return game;
 }
