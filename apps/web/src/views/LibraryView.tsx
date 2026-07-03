@@ -24,8 +24,8 @@ import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { cn } from "@/lib/utils";
-import * as api from "@/lib/api";
-import { ApiError } from "@/lib/api";
+import { gamesRepo } from "@/lib/db/games-repo";
+import { collectionsRepo } from "@/lib/db/collections-repo";
 import { useAnalyzerStore, useLibraryStore } from "@/store";
 
 const SOURCES: ImportSource[] = [
@@ -39,7 +39,6 @@ const SOURCES: ImportSource[] = [
 type SortKey = NonNullable<LibraryQuery["sort"]>;
 
 function errorMessage(err: unknown): string {
-  if (err instanceof ApiError) return err.message;
   if (err instanceof Error) return err.message;
   return "Something went wrong.";
 }
@@ -60,7 +59,7 @@ function CollectionsSidebar({
 }) {
   const queryClient = useQueryClient();
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.deleteCollection(id),
+    mutationFn: (id: string) => collectionsRepo.delete(id),
     onSuccess: (_data, id) => {
       if (activeId === id) onSelect(undefined);
       void queryClient.invalidateQueries({ queryKey: ["collections"] });
@@ -179,16 +178,20 @@ export function LibraryView() {
 
   const collectionsQuery = useQuery({
     queryKey: ["collections"],
-    queryFn: () => api.listCollections(),
+    queryFn: () => collectionsRepo.list(),
   });
 
   const libraryQuery = useQuery({
     queryKey: ["library", query],
-    queryFn: () => api.searchLibrary(query),
+    queryFn: () => gamesRepo.search(query),
   });
 
   const openMutation = useMutation({
-    mutationFn: (id: string) => api.getLibraryGame(id),
+    mutationFn: async (id: string) => {
+      const game = await gamesRepo.get(id);
+      if (!game) throw new Error("Game not found");
+      return game;
+    },
     onSuccess: (game) => {
       setGame(game);
       void navigate({ to: "/" });
@@ -198,7 +201,7 @@ export function LibraryView() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.deleteLibraryGame(id),
+    mutationFn: (id: string) => gamesRepo.delete(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["library"] });
       void queryClient.invalidateQueries({ queryKey: ["collections"] });
@@ -357,7 +360,11 @@ export function LibraryView() {
                       {g.result && g.result !== "*" ? g.result : "—"}
                     </td>
                     <td className="max-w-48 truncate px-3 py-2">
-                      {g.eco ? <span className="mr-1.5 text-muted-foreground">{g.eco}</span> : null}
+                      {g.eco ? (
+                        <span className="mr-1.5 text-muted-foreground">
+                          {g.eco}
+                        </span>
+                      ) : null}
                       {g.opening ?? "—"}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
