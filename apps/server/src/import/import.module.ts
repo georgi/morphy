@@ -10,7 +10,7 @@ import { PgnSplitter } from './pgn-splitter';
 
 /**
  * Bulk-import subsystem. Depends on the `@Global()` PersistenceModule for the
- * games/collections/import-jobs repositories, and on {@link ChessModule} for the
+ * (in-memory) import-jobs repository, and on {@link ChessModule} for the
  * probe-hardened PGN parser. {@link ImportService} is exported so a later agent
  * `import_games` tool can reuse it.
  *

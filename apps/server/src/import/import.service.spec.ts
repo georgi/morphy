@@ -3,7 +3,6 @@ import type { ImportEvent, StartImportRequest } from '@chess/shared';
 import { ImportService } from './import.service';
 import type { GameSource } from './game-source';
 import { ChessService } from '../chess/chess.service';
-import { openDatabase, type Db } from '../persistence/database';
 import { ImportJobsRepository } from '../persistence/import-jobs.repository';
 
 // Two distinct legal games + one that re-exports game A with decorations
@@ -45,13 +44,13 @@ type SourceSlot = 'url' | 'lichess' | 'chesscom' | 'catalog';
 
 /**
  * Build an ImportService wired to a real {@link ImportJobsRepository} (the only
- * repository it still touches), with the chosen source slot replaced by `source`
- * (a fixture). Defaults to the `url` slot; remote-source pipeline tests pass a
- * `slot`. Games/collections are no longer persisted — they are streamed to the
- * client — so no games/collections repositories are wired.
+ * collaborator it still tracks state through — now an in-memory store), with the
+ * chosen source slot replaced by `source` (a fixture). Defaults to the `url`
+ * slot; remote-source pipeline tests pass a `slot`. Games/collections are no
+ * longer persisted — they are streamed to the client — so no games/collections
+ * repositories are wired.
  */
 function makeService(
-  db: Db,
   source: GameSource,
   slot: SourceSlot = 'url',
 ): {
@@ -59,7 +58,7 @@ function makeService(
   jobs: ImportJobsRepository;
 } {
   const chess = new ChessService();
-  const jobs = new ImportJobsRepository(db);
+  const jobs = new ImportJobsRepository();
   // The unused source slots get a never-called fixture so the constructor is
   // satisfied; only the chosen `slot` carries the test fixture.
   const unused = new FixtureSource([], 0);
@@ -91,19 +90,9 @@ function collectEvents(
 }
 
 describe('ImportService', () => {
-  let db: Db;
-
-  beforeEach(() => {
-    db = openDatabase(':memory:');
-  });
-
-  afterEach(() => {
-    db.close();
-  });
-
   it('streams a full game + content hash per parsed game and does not dedup', async () => {
     const source = new FixtureSource([GAME_A, GAME_A_DUP, GAME_B, INVALID]);
-    const { service, jobs } = makeService(db, source);
+    const { service, jobs } = makeService(source);
 
     const req: StartImportRequest = { source: 'url', url: 'http://x/games.pgn' };
     const { jobId } = service.start(req);
@@ -140,7 +129,7 @@ describe('ImportService', () => {
 
   it('emits a collection frame up front for a named import and links it on done', async () => {
     const source = new FixtureSource([GAME_A, GAME_B]);
-    const { service, jobs } = makeService(db, source);
+    const { service, jobs } = makeService(source);
 
     const req: StartImportRequest = {
       source: 'url',
@@ -173,7 +162,7 @@ describe('ImportService', () => {
   });
 
   it('re-imports the same batch without server-side dedup (dedup is client-side)', async () => {
-    const first = makeService(db, new FixtureSource([GAME_A, GAME_B]));
+    const first = makeService(new FixtureSource([GAME_A, GAME_B]));
     const firstEvents = await collectEvents(
       first.service,
       first.service.start({ source: 'url', url: 'http://x/a.pgn' }).jobId,
@@ -182,7 +171,7 @@ describe('ImportService', () => {
 
     // Second run over the same games streams both again — the server keeps no
     // state, so it cannot skip; the client dedups against its own library.
-    const second = makeService(db, new FixtureSource([GAME_A, GAME_B]));
+    const second = makeService(new FixtureSource([GAME_A, GAME_B]));
     const { jobId } = second.service.start({
       source: 'url',
       url: 'http://x/a.pgn',
@@ -196,7 +185,7 @@ describe('ImportService', () => {
 
   it('ends the job as error when the source fails before any game', async () => {
     const source = new FixtureSource([], 0); // throws on first iteration
-    const { service, jobs } = makeService(db, source);
+    const { service, jobs } = makeService(source);
 
     const { jobId } = service.start({ source: 'url', url: 'http://x/404.pgn' });
     const events = await collectEvents(service, jobId);
@@ -214,7 +203,7 @@ describe('ImportService', () => {
   it('ends as done (partial) when the source fails after some games streamed', async () => {
     // Yield A then throw — A is streamed, the failure is non-fatal (partial).
     const source = new FixtureSource([GAME_A, GAME_B], 1);
-    const { service, jobs } = makeService(db, source);
+    const { service, jobs } = makeService(source);
 
     const { jobId } = service.start({ source: 'url', url: 'http://x/partial.pgn' });
     const events = await collectEvents(service, jobId);
@@ -229,7 +218,7 @@ describe('ImportService', () => {
 
   it('streams a lichess import under a provider-tagged collection frame', async () => {
     const source = new FixtureSource([GAME_A, GAME_B]);
-    const { service, jobs } = makeService(db, source, 'lichess');
+    const { service, jobs } = makeService(source, 'lichess');
 
     const { jobId } = service.start({
       source: 'lichess',
@@ -257,7 +246,7 @@ describe('ImportService', () => {
 
   it('streams a catalog import under a titled collection frame', async () => {
     const source = new FixtureSource([GAME_A]);
-    const { service, jobs } = makeService(db, source, 'catalog');
+    const { service, jobs } = makeService(source, 'catalog');
 
     // Any real manifest entry id; the fixture source ignores it but the
     // collection name/title is derived from the manifest.
@@ -279,7 +268,7 @@ describe('ImportService', () => {
 
   it('replays the terminal `done` frame to a client that subscribes after the job finished', async () => {
     const source = new FixtureSource([GAME_A, GAME_B]);
-    const { service, jobs } = makeService(db, source);
+    const { service, jobs } = makeService(source);
 
     const { jobId } = service.start({
       source: 'url',
@@ -304,7 +293,7 @@ describe('ImportService', () => {
   });
 
   it('replays a terminal `error` frame to a late subscriber when the source failed', async () => {
-    const { service } = makeService(db, new FixtureSource([], 0));
+    const { service } = makeService(new FixtureSource([], 0));
     const { jobId } = service.start({ source: 'url', url: 'http://x/404.pgn' });
     await collectEvents(service, jobId);
 
@@ -316,7 +305,7 @@ describe('ImportService', () => {
   it('streams the up-front collection then an error when the source fails before any game', async () => {
     // A named URL import describes a collection up front; a hard failure before
     // any game streams both frames — the client drops the orphaned collection.
-    const { service, jobs } = makeService(db, new FixtureSource([], 0));
+    const { service, jobs } = makeService(new FixtureSource([], 0));
     const { jobId } = service.start({
       source: 'url',
       url: 'http://x/404.pgn',

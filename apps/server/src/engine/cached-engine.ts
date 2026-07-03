@@ -33,9 +33,9 @@ export class CachedEngine {
   /**
    * `cache` is `@Optional` so CachedEngine stays self-sufficient when wired in
    * isolation (unit tests, or a feature module compiled without the `@Global`
-   * PersistenceModule), mirroring {@link GameStore}'s fallback. In the running
-   * app the global EvalCacheRepository is injected; absent it, a private
-   * in-memory cache keeps behavior intact (just not durable).
+   * PersistenceModule). In the running app the global EvalCacheRepository is
+   * injected; absent it, a private in-memory cache keeps behavior intact (just
+   * not durable).
    */
   constructor(
     private readonly engine: EngineService,

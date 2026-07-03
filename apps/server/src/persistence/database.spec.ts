@@ -17,21 +17,15 @@ describe('database', () => {
     });
     afterEach(() => db.close());
 
-    it('creates all four tables plus schema_version', () => {
+    it('creates only the eval_cache and schema_version tables', () => {
       const names = (
         db
           .prepare("SELECT name FROM sqlite_master WHERE type='table'")
           .all() as { name: string }[]
       ).map((r) => r.name);
-      expect(names).toEqual(
-        expect.arrayContaining([
-          'games',
-          'collections',
-          'eval_cache',
-          'import_jobs',
-          'schema_version',
-        ]),
-      );
+      // The server-side library storage was dropped: the only persisted table is
+      // the global eval cache (plus the schema_version marker).
+      expect(names.sort()).toEqual(['eval_cache', 'schema_version']);
     });
 
     it('records the current schema_version', () => {
@@ -39,26 +33,6 @@ describe('database', () => {
         .prepare('SELECT version FROM schema_version LIMIT 1')
         .get() as { version: number };
       expect(row.version).toBe(SCHEMA_VERSION);
-    });
-
-    it('creates the expected indexes', () => {
-      const idx = (
-        db
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'",
-          )
-          .all() as { name: string }[]
-      ).map((r) => r.name);
-      expect(idx).toEqual(
-        expect.arrayContaining([
-          'idx_games_white',
-          'idx_games_black',
-          'idx_games_eco',
-          'idx_games_source',
-          'idx_games_collection',
-          'idx_games_created_at',
-        ]),
-      );
     });
 
     it('migrate is idempotent (re-running does not duplicate schema_version or error)', () => {
@@ -93,7 +67,7 @@ describe('database', () => {
         const tables = db2
           .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table'")
           .get() as { n: number };
-        expect(tables.n).toBeGreaterThanOrEqual(5);
+        expect(tables.n).toBe(2);
         db2.close();
       } finally {
         rmSync(dir, { recursive: true, force: true });

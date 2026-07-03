@@ -85,14 +85,6 @@ describe('REST API (e2e)', () => {
     });
   });
 
-  describe('GET /games/:id', () => {
-    it('returns 404 for an unknown id', async () => {
-      await request(app.getHttpServer())
-        .get('/games/does-not-exist')
-        .expect(404);
-    });
-  });
-
   describe('POST /analysis/position', () => {
     it('returns an engine eval', async () => {
       const res = await request(app.getHttpServer())

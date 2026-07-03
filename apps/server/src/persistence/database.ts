@@ -13,7 +13,7 @@ export const DATABASE = Symbol('DATABASE');
 export type Db = Database.Database;
 
 /** Bump when a non-idempotent schema change ships; mismatch fails fast on boot. */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /**
  * Resolve the on-disk database path from the environment.
@@ -28,44 +28,12 @@ export function resolveDbPath(): string {
 }
 
 /**
- * Idempotent schema. `CREATE TABLE IF NOT EXISTS` for all four tables plus their
- * indexes, run on every boot. A `schema_version` row records the version we
- * migrated to; an unexpected stored version fails fast (see {@link migrate}).
+ * Idempotent schema. The client now owns the game library (IndexedDB), so the
+ * server persists only the global Stockfish `eval_cache`. `CREATE TABLE IF NOT
+ * EXISTS` runs on every boot; a `schema_version` row records the version we
+ * migrated to, and an unexpected stored version fails fast (see {@link migrate}).
  */
 const SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS games (
-  id            TEXT PRIMARY KEY,
-  white         TEXT,
-  black         TEXT,
-  result        TEXT,
-  eco           TEXT,
-  opening       TEXT,
-  date          TEXT,
-  ply_count     INTEGER NOT NULL DEFAULT 0,
-  content_hash  TEXT NOT NULL UNIQUE,
-  source        TEXT NOT NULL DEFAULT 'manual',
-  collection_id TEXT REFERENCES collections(id),
-  has_analysis  INTEGER NOT NULL DEFAULT 0,
-  created_at    INTEGER NOT NULL,
-  data          TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_games_white ON games(white);
-CREATE INDEX IF NOT EXISTS idx_games_black ON games(black);
-CREATE INDEX IF NOT EXISTS idx_games_eco ON games(eco);
-CREATE INDEX IF NOT EXISTS idx_games_source ON games(source);
-CREATE INDEX IF NOT EXISTS idx_games_collection ON games(collection_id);
-CREATE INDEX IF NOT EXISTS idx_games_created_at ON games(created_at);
-
-CREATE TABLE IF NOT EXISTS collections (
-  id          TEXT PRIMARY KEY,
-  name        TEXT NOT NULL,
-  description TEXT,
-  source      TEXT NOT NULL DEFAULT 'manual',
-  source_ref  TEXT,
-  game_count  INTEGER NOT NULL DEFAULT 0,
-  created_at  INTEGER NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS eval_cache (
   fen_norm   TEXT NOT NULL,
   depth      INTEGER NOT NULL,
@@ -74,21 +42,6 @@ CREATE TABLE IF NOT EXISTS eval_cache (
   eval_json  TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (fen_norm, depth, multipv, engine_id)
-);
-
-CREATE TABLE IF NOT EXISTS import_jobs (
-  id            TEXT PRIMARY KEY,
-  source        TEXT NOT NULL,
-  params        TEXT,
-  status        TEXT NOT NULL,
-  total         INTEGER,
-  imported      INTEGER NOT NULL DEFAULT 0,
-  skipped       INTEGER NOT NULL DEFAULT 0,
-  failed        INTEGER NOT NULL DEFAULT 0,
-  collection_id TEXT,
-  error         TEXT,
-  created_at    INTEGER NOT NULL,
-  updated_at    INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -103,7 +56,6 @@ CREATE TABLE IF NOT EXISTS schema_version (
  */
 export function migrate(db: Db): void {
   db.exec(SCHEMA_SQL);
-  backfillColumns(db);
   const row = db
     .prepare('SELECT version FROM schema_version LIMIT 1')
     .get() as { version: number } | undefined;
@@ -121,21 +73,6 @@ export function migrate(db: Db): void {
   }
   if (row.version < SCHEMA_VERSION) {
     db.prepare('UPDATE schema_version SET version = ?').run(SCHEMA_VERSION);
-  }
-}
-
-/**
- * Add columns introduced after a table first shipped, for on-disk DBs created by
- * an earlier build whose `CREATE TABLE IF NOT EXISTS` lacked them. Idempotent:
- * checks the live column set first and only adds what's missing (SQLite has no
- * `ADD COLUMN IF NOT EXISTS`). `import_jobs.collection_id` was added here.
- */
-function backfillColumns(db: Db): void {
-  const cols = (
-    db.prepare('PRAGMA table_info(import_jobs)').all() as { name: string }[]
-  ).map((c) => c.name);
-  if (!cols.includes('collection_id')) {
-    db.exec('ALTER TABLE import_jobs ADD COLUMN collection_id TEXT');
   }
 }
 

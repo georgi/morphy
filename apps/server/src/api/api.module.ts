@@ -7,10 +7,10 @@ import { AnalysisController } from './analysis.controller';
 import { EngineExceptionFilter } from './engine-exception.filter';
 
 /**
- * REST surface for direct (non-agent) UI actions: importing/fetching games and
- * running engine analysis. Controllers delegate to the shared ChessService /
- * GameStore / AnalysisService (re-exported by ChessModule and AnalysisModule),
- * so the REST API and the agent tools stay on a single source of truth.
+ * REST surface for direct (non-agent) UI actions: importing games and running
+ * engine analysis. Controllers delegate to the shared ChessService /
+ * AnalysisService (re-exported by ChessModule and AnalysisModule), so the REST
+ * API and the agent tools stay on a single source of truth.
  */
 @Module({
   imports: [ChessModule, AnalysisModule],

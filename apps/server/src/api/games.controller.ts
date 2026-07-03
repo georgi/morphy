@@ -1,32 +1,17 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  Get,
-  NotFoundException,
-  Param,
-  Post,
-} from '@nestjs/common';
+import { BadRequestException, Body, Controller, Post } from '@nestjs/common';
 import { contentHash } from '@chess/shared';
-import type {
-  Game,
-  ImportGameRequest,
-  ImportGameResponse,
-} from '@chess/shared';
+import type { ImportGameRequest, ImportGameResponse } from '@chess/shared';
 import { ChessService } from '../chess/chess.service';
-import { GameStore } from '../chess/game.store';
 
 /**
- * Direct (non-agent) game endpoints: import a game from PGN or FEN, and fetch a
- * previously imported game by id. Parsing/validation lives in ChessService, which
- * throws BadRequestException on bad input — those surface as HTTP 400.
+ * Direct (non-agent) game endpoint: import a game from PGN or FEN and return the
+ * parsed {@link Game} plus its dedup content hash. The server no longer persists
+ * games — the client writes the result into its own library. Parsing/validation
+ * lives in ChessService, which throws BadRequestException on bad input (HTTP 400).
  */
 @Controller('games')
 export class GamesController {
-  constructor(
-    private readonly chess: ChessService,
-    private readonly store: GameStore,
-  ) {}
+  constructor(private readonly chess: ChessService) {}
 
   /**
    * Import a game from exactly one of `pgn` or `fen`, returning the parsed
@@ -50,15 +35,5 @@ export class GamesController {
 
     const game = pgn ? this.chess.importPgn(pgn) : this.chess.importFen(fen);
     return { game, contentHash: contentHash(game) };
-  }
-
-  /** Fetch a stored game by id, or 404 if it was never imported (or has reset). */
-  @Get(':id')
-  getGame(@Param('id') id: string): Game {
-    const game = this.store.get(id);
-    if (!game) {
-      throw new NotFoundException(`Game not found: ${id}`);
-    }
-    return game;
   }
 }

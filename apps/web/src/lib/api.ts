@@ -1,7 +1,6 @@
 // apps/web/src/lib/api.ts — typed REST + SSE client over the NestJS backend.
 // All requests hit the "/api" prefix (proxied to http://localhost:3001 in dev).
 import type {
-  Game,
   EngineEval,
   MoveEval,
   ImportGameRequest,
@@ -11,10 +10,6 @@ import type {
   KeyMomentsRequest,
   AgentMessageRequest,
   AgentEvent,
-  Collection,
-  GameSummary,
-  LibraryPage,
-  LibraryQuery,
   CatalogEntry,
   StartImportRequest,
   ImportJob,
@@ -77,10 +72,6 @@ export function importGame(
   });
 }
 
-export function getGame(id: string): Promise<Game> {
-  return request<Game>(`/games/${encodeURIComponent(id)}`);
-}
-
 export function analyzePosition(
   body: AnalyzePositionRequest,
 ): Promise<EngineEval> {
@@ -107,55 +98,6 @@ export function keyMoments(body: KeyMomentsRequest): Promise<KeyMoment[]> {
   return request<KeyMoment[]>("/analysis/key-moments", {
     method: "POST",
     body: JSON.stringify(body),
-  });
-}
-
-/** Serialize a {@link LibraryQuery} into a `?key=value` string, dropping empties. */
-function libraryQueryString(query: LibraryQuery): string {
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(query)) {
-    if (value === undefined || value === null || value === "") continue;
-    params.set(key, String(value));
-  }
-  const qs = params.toString();
-  return qs ? `?${qs}` : "";
-}
-
-/** Search/sort/paginate the game library. */
-export function searchLibrary(query: LibraryQuery = {}): Promise<LibraryPage> {
-  return request<LibraryPage>(`/library/games${libraryQueryString(query)}`);
-}
-
-/** Fetch the full stored game (loaded into the analysis view on row click). */
-export function getLibraryGame(id: string): Promise<Game> {
-  return request<Game>(`/library/games/${encodeURIComponent(id)}`);
-}
-
-/** Delete a stored game from the library. */
-export function deleteLibraryGame(id: string): Promise<void> {
-  return request<void>(`/library/games/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-  });
-}
-
-/** List all collections (with their game counts). */
-export function listCollections(): Promise<Collection[]> {
-  return request<Collection[]>("/library/collections");
-}
-
-/** Fetch a collection and the games it contains. */
-export function getCollection(
-  id: string,
-): Promise<{ collection: Collection; games: GameSummary[] }> {
-  return request<{ collection: Collection; games: GameSummary[] }>(
-    `/library/collections/${encodeURIComponent(id)}`,
-  );
-}
-
-/** Delete a collection and cascade-delete its games. */
-export function deleteCollection(id: string): Promise<void> {
-  return request<void>(`/library/collections/${encodeURIComponent(id)}`, {
-    method: "DELETE",
   });
 }
 

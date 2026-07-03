@@ -1,15 +1,16 @@
 import { Global, Module } from '@nestjs/common';
 import { DATABASE, openDatabase, type Db } from './database';
-import { GamesRepository } from './games.repository';
 import { EvalCacheRepository } from './eval-cache.repository';
-import { CollectionsRepository } from './collections.repository';
 import { ImportJobsRepository } from './import-jobs.repository';
 
 /**
  * Durable storage layer. Opens the single better-sqlite3 connection on boot
  * (WAL, migrations) and exposes it via the {@link DATABASE} token alongside the
- * repositories. `@Global()` so any feature module can inject these without
- * re-importing.
+ * {@link EvalCacheRepository} (the only persisted table). `@Global()` so any
+ * feature module can inject these without re-importing.
+ *
+ * {@link ImportJobsRepository} is in-memory (no SQLite backing) but lives here so
+ * the import subsystem injects it like any other shared, process-wide singleton.
  */
 @Global()
 @Module({
@@ -18,17 +19,9 @@ import { ImportJobsRepository } from './import-jobs.repository';
       provide: DATABASE,
       useFactory: (): Db => openDatabase(),
     },
-    GamesRepository,
     EvalCacheRepository,
-    CollectionsRepository,
     ImportJobsRepository,
   ],
-  exports: [
-    DATABASE,
-    GamesRepository,
-    EvalCacheRepository,
-    CollectionsRepository,
-    ImportJobsRepository,
-  ],
+  exports: [DATABASE, EvalCacheRepository, ImportJobsRepository],
 })
 export class PersistenceModule {}

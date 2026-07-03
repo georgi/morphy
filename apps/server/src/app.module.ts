@@ -6,7 +6,6 @@ import { ChessModule } from './chess/chess.module';
 import { AnalysisModule } from './analysis/analysis.module';
 import { ApiModule } from './api/api.module';
 import { AgentModule } from './agent/agent.module';
-import { LibraryModule } from './library/library.module';
 import { ImportModule } from './import/import.module';
 
 @Module({
@@ -17,7 +16,6 @@ import { ImportModule } from './import/import.module';
     AnalysisModule,
     ApiModule,
     AgentModule,
-    LibraryModule,
     ImportModule,
   ],
   controllers: [AppController],
