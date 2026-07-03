@@ -155,14 +155,15 @@ describe("ImportDialog (download dialog)", () => {
   it("shows a live progress panel reflecting the import store", async () => {
     renderDialog();
     await openDialog();
-    // Seed a running job with some progress; the panel reads from the store.
-    useImportStore.getState().startJob("job-xyz", "url");
-    useImportStore.getState().applyEvent({
-      type: "progress",
-      imported: 3,
-      skipped: 1,
-      failed: 0,
-      total: 8,
+    // Seed a running job with some progress directly; the panel just reads the
+    // store (imported/skipped are computed by the store's IDB dedup elsewhere).
+    useImportStore.setState({
+      job: {
+        jobId: "job-xyz",
+        source: "url",
+        status: "running",
+        progress: { imported: 3, skipped: 1, failed: 0, total: 8 },
+      },
     });
     await waitFor(() =>
       expect(screen.getByText("Imported 3")).toBeDefined(),

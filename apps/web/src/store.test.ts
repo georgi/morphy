@@ -1,5 +1,13 @@
+import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Game, EngineEval, MoveEval, ImportEvent } from "@chess/shared";
+import type {
+  Collection,
+  Game,
+  EngineEval,
+  ImportSource,
+  MoveEval,
+  ImportEvent,
+} from "@chess/shared";
 import {
   useAnalyzerStore,
   useImportStore,
@@ -11,6 +19,9 @@ import {
   START_FEN,
 } from "@/store";
 import { emptyTree } from "@/lib/moveTree";
+import { gamesRepo } from "@/lib/db/games-repo";
+import { collectionsRepo } from "@/lib/db/collections-repo";
+import { resetLibraryDbForTests } from "@/lib/db/library-db";
 
 /** A tiny two-move game (1. e4 e5) used across the store tests. */
 function makeGame(): Game {
@@ -380,7 +391,28 @@ describe("model selection", () => {
 });
 
 describe("import job progress", () => {
+  /** A `game` event carrying a game with the given id + a content hash. */
+  function gameEvent(id: string, contentHash: string): ImportEvent {
+    return { type: "game", game: { ...makeGame(), id }, contentHash };
+  }
+
+  /** A `collection` event for a streamed collection. */
+  function collectionEvent(
+    id: string,
+    source: ImportSource = "lichess",
+  ): ImportEvent {
+    const collection: Collection = {
+      id,
+      name: `Collection ${id}`,
+      source,
+      gameCount: 0,
+      createdAt: Date.now(),
+    };
+    return { type: "collection", collection };
+  }
+
   beforeEach(() => {
+    resetLibraryDbForTests();
     useImportStore.setState({ job: null });
   });
 
@@ -395,85 +427,134 @@ describe("import job progress", () => {
     });
   });
 
-  it("folds progress events into the running counts (incl. total)", () => {
+  it("a progress event adopts failed/total but leaves client counts alone", async () => {
     useImportStore.getState().startJob("job-1", "chesscom");
-    const progress: ImportEvent = {
+    // The server no longer knows imported/skipped (the client dedups); those
+    // fields on a progress frame are ignored — only failed/total are adopted.
+    await useImportStore.getState().applyEvent({
       type: "progress",
-      imported: 3,
-      skipped: 1,
-      failed: 0,
+      imported: 99,
+      skipped: 99,
+      failed: 2,
       total: 10,
-    };
-    useImportStore.getState().applyEvent(progress);
+    });
     expect(useImportStore.getState().job?.progress).toEqual({
-      imported: 3,
-      skipped: 1,
-      failed: 0,
+      imported: 0,
+      skipped: 0,
+      failed: 2,
       total: 10,
     });
   });
 
-  it("a done event finalizes status, counts, and collectionId", () => {
-    useImportStore.getState().startJob("job-1", "catalog");
-    useImportStore.getState().applyEvent({
-      type: "progress",
-      imported: 4,
-      skipped: 0,
-      failed: 1,
-      total: 5,
+  it("a game event writes to IndexedDB and increments imported", async () => {
+    useImportStore.getState().startJob("job-1", "url");
+    await useImportStore.getState().applyEvent(gameEvent("g1", "hash-1"));
+
+    expect(useImportStore.getState().job?.progress.imported).toBe(1);
+    expect(await gamesRepo.existsByHash("hash-1")).toBe(true);
+    // A bare URL import with no collection stores provenance `'manual'`.
+    const stored = await gamesRepo.get("g1");
+    expect(stored).toBeDefined();
+    const page = await gamesRepo.search({});
+    expect(page.games[0].source).toBe("manual");
+  });
+
+  it("a duplicate contentHash increments skipped and does not double-write", async () => {
+    useImportStore.getState().startJob("job-1", "url");
+    await useImportStore.getState().applyEvent(gameEvent("g1", "dup"));
+    // A second, different game id but the SAME content hash is a dedup skip.
+    await useImportStore.getState().applyEvent(gameEvent("g2", "dup"));
+
+    expect(useImportStore.getState().job?.progress).toMatchObject({
+      imported: 1,
+      skipped: 1,
     });
-    useImportStore.getState().applyEvent({
+    expect(await gamesRepo.get("g1")).toBeDefined();
+    expect(await gamesRepo.get("g2")).toBeUndefined();
+  });
+
+  it("assigns strictly increasing createdAt to games in one batch", async () => {
+    useImportStore.getState().startJob("job-1", "url");
+    await useImportStore.getState().applyEvent(gameEvent("g1", "h1"));
+    await useImportStore.getState().applyEvent(gameEvent("g2", "h2"));
+    await useImportStore.getState().applyEvent(gameEvent("g3", "h3"));
+
+    // Each game gets a distinct, strictly increasing createdAt (not one shared
+    // Date.now()), so newest-first ordering within a batch is deterministic.
+    const page = await gamesRepo.search({ sort: "createdAt", dir: "asc" });
+    const createdAts = page.games.map((g) => g.createdAt);
+    expect(createdAts).toHaveLength(3);
+    expect(createdAts[0]).toBeLessThan(createdAts[1]);
+    expect(createdAts[1]).toBeLessThan(createdAts[2]);
+    // Ascending createdAt == arrival order.
+    expect(page.games.map((g) => g.id)).toEqual(["g1", "g2", "g3"]);
+  });
+
+  it("a collection event creates the collection and links later games", async () => {
+    useImportStore.getState().startJob("job-1", "lichess");
+    await useImportStore.getState().applyEvent(collectionEvent("col-1"));
+    await useImportStore.getState().applyEvent(gameEvent("g1", "h1"));
+
+    expect(useImportStore.getState().job?.collectionId).toBe("col-1");
+    expect(await collectionsRepo.get("col-1")).toBeDefined();
+    const page = await gamesRepo.search({ collectionId: "col-1" });
+    expect(page.total).toBe(1);
+    expect(page.games[0].source).toBe("lichess");
+  });
+
+  it("done recounts a non-empty collection and finalizes the job", async () => {
+    useImportStore.getState().startJob("job-1", "lichess");
+    await useImportStore.getState().applyEvent(collectionEvent("col-1"));
+    await useImportStore.getState().applyEvent(gameEvent("g1", "h1"));
+    await useImportStore.getState().applyEvent({
       type: "done",
-      imported: 5,
+      imported: 1,
       skipped: 0,
-      failed: 1,
-      collectionId: "c-9",
+      failed: 0,
+      collectionId: "col-1",
     });
+
     const { job } = useImportStore.getState();
     expect(job?.status).toBe("done");
-    expect(job?.collectionId).toBe("c-9");
-    expect(job?.progress).toEqual({
-      imported: 5,
-      skipped: 0,
-      failed: 1,
-      total: 5, // carried over from the last progress event
-    });
+    expect(job?.collectionId).toBe("col-1");
+    const collection = await collectionsRepo.get("col-1");
+    expect(collection?.gameCount).toBe(1);
   });
 
-  it("an error event marks the job failed with a message", () => {
+  it("done drops an up-front collection that ended empty", async () => {
     useImportStore.getState().startJob("job-1", "lichess");
-    useImportStore.getState().applyEvent({
+    await useImportStore.getState().applyEvent(collectionEvent("col-1"));
+    // No games streamed before done.
+    await useImportStore.getState().applyEvent({
+      type: "done",
+      imported: 0,
+      skipped: 0,
+      failed: 0,
+      collectionId: "col-1",
+    });
+
+    const { job } = useImportStore.getState();
+    expect(job?.status).toBe("done");
+    expect(job?.collectionId).toBeUndefined();
+    expect(await collectionsRepo.get("col-1")).toBeUndefined();
+  });
+
+  it("an error event marks the job failed and drops an orphaned collection", async () => {
+    useImportStore.getState().startJob("job-1", "lichess");
+    await useImportStore.getState().applyEvent(collectionEvent("col-1"));
+    await useImportStore.getState().applyEvent({
       type: "error",
       message: "404: study not found",
     });
     const { job } = useImportStore.getState();
     expect(job?.status).toBe("error");
     expect(job?.error).toBe("404: study not found");
+    expect(job?.collectionId).toBeUndefined();
+    expect(await collectionsRepo.get("col-1")).toBeUndefined();
   });
 
-  it("game events do not disturb the running counts", () => {
-    useImportStore.getState().startJob("job-1", "url");
-    useImportStore.getState().applyEvent({
-      type: "progress",
-      imported: 2,
-      skipped: 0,
-      failed: 0,
-    });
-    useImportStore.getState().applyEvent({
-      type: "game",
-      summary: {
-        id: "g1",
-        plyCount: 10,
-        source: "url",
-        hasAnalysis: false,
-        createdAt: 1,
-      },
-    });
-    expect(useImportStore.getState().job?.progress.imported).toBe(2);
-  });
-
-  it("applyEvent is a no-op when no job is active", () => {
-    useImportStore.getState().applyEvent({
+  it("applyEvent is a no-op when no job is active", async () => {
+    await useImportStore.getState().applyEvent({
       type: "progress",
       imported: 9,
       skipped: 9,

@@ -8,8 +8,9 @@ import { EngineUnavailableError } from '../engine/errors';
 
 /**
  * Controller-level e2e for the direct REST surface. The engine is stubbed so the
- * suite runs without a Stockfish binary; ChessService / GameStore are real, so
- * import + persistence + error mapping are exercised end-to-end.
+ * suite runs without a Stockfish binary; ChessService is real, so PGN/FEN parsing
+ * + error mapping are exercised end-to-end. `POST /games` no longer persists — it
+ * returns the parsed game plus its content hash for the client to store.
  */
 describe('REST API (e2e)', () => {
   let app: INestApplication;
@@ -44,20 +45,16 @@ describe('REST API (e2e)', () => {
   });
 
   describe('POST /games', () => {
-    it('imports a PGN and returns a persisted game', async () => {
+    it('imports a PGN and returns the parsed game plus a content hash', async () => {
       const pgn = '1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 *';
       const res = await request(app.getHttpServer())
         .post('/games')
         .send({ pgn })
         .expect(201);
 
-      expect(res.body.id).toEqual(expect.any(String));
-      expect(res.body.moves).toHaveLength(6);
-
-      // Persisted: GET by the returned id round-trips.
-      await request(app.getHttpServer())
-        .get(`/games/${res.body.id}`)
-        .expect(200);
+      expect(res.body.game.id).toEqual(expect.any(String));
+      expect(res.body.game.moves).toHaveLength(6);
+      expect(res.body.contentHash).toEqual(expect.any(String));
     });
 
     it('imports a FEN', async () => {
@@ -65,8 +62,8 @@ describe('REST API (e2e)', () => {
         .post('/games')
         .send({ fen: STARTPOS_FEN })
         .expect(201);
-      expect(res.body.startFen).toContain('rnbqkbnr');
-      expect(res.body.moves).toEqual([]);
+      expect(res.body.game.startFen).toContain('rnbqkbnr');
+      expect(res.body.game.moves).toEqual([]);
     });
 
     it('rejects a request with neither pgn nor fen (400)', async () => {
@@ -136,7 +133,7 @@ describe('REST API (e2e)', () => {
 
       const res = await request(app.getHttpServer())
         .post('/analysis/game')
-        .send({ game: imported.body })
+        .send({ game: imported.body.game })
         .expect(201);
 
       expect(Array.isArray(res.body)).toBe(true);
@@ -161,7 +158,7 @@ describe('REST API (e2e)', () => {
 
       const res = await request(app.getHttpServer())
         .post('/analysis/key-moments')
-        .send({ game: imported.body })
+        .send({ game: imported.body.game })
         .expect(201);
 
       expect(res.body).toEqual([]);

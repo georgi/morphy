@@ -7,7 +7,12 @@ import {
   Param,
   Post,
 } from '@nestjs/common';
-import type { Game, ImportGameRequest } from '@chess/shared';
+import { contentHash } from '@chess/shared';
+import type {
+  Game,
+  ImportGameRequest,
+  ImportGameResponse,
+} from '@chess/shared';
 import { ChessService } from '../chess/chess.service';
 import { GameStore } from '../chess/game.store';
 
@@ -24,12 +29,13 @@ export class GamesController {
   ) {}
 
   /**
-   * Import a game from exactly one of `pgn` or `fen`, persist it, and return it.
-   * Supplying neither (or both) is a client error → 400. Invalid PGN/FEN is also
-   * 400, raised by ChessService.
+   * Import a game from exactly one of `pgn` or `fen`, returning the parsed
+   * {@link Game} plus its dedup content hash. The server no longer persists it —
+   * the client writes it into its own library. Supplying neither (or both) is a
+   * client error → 400. Invalid PGN/FEN is also 400, raised by ChessService.
    */
   @Post()
-  importGame(@Body() body: ImportGameRequest): Game {
+  importGame(@Body() body: ImportGameRequest): ImportGameResponse {
     const pgn = typeof body?.pgn === 'string' ? body.pgn.trim() : '';
     const fen = typeof body?.fen === 'string' ? body.fen.trim() : '';
 
@@ -43,7 +49,7 @@ export class GamesController {
     }
 
     const game = pgn ? this.chess.importPgn(pgn) : this.chess.importFen(fen);
-    return this.store.create(game);
+    return { game, contentHash: contentHash(game) };
   }
 
   /** Fetch a stored game by id, or 404 if it was never imported (or has reset). */

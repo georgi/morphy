@@ -5,6 +5,7 @@ import type {
   EngineEval,
   MoveEval,
   AgentEvent,
+  ImportSource,
   LibraryQuery,
   ImportEvent,
 } from "@chess/shared";
@@ -18,6 +19,8 @@ import {
   mainlineNodeAtPly,
   nearestMainlinePly,
 } from "@/lib/moveTree";
+import { gamesRepo } from "@/lib/db/games-repo";
+import { collectionsRepo } from "@/lib/db/collections-repo";
 import * as api from "@/lib/api";
 
 export const START_FEN =
@@ -127,70 +130,188 @@ export interface ImportJobState {
 const ZERO_PROGRESS: ImportProgress = { imported: 0, skipped: 0, failed: 0 };
 
 /**
- * Tracks the single active import job and its accumulated progress. The download
- * dialog calls `startJob` on `POST /api/import`, then feeds each SSE
- * {@link ImportEvent} through `applyEvent`; `clearJob` resets between imports.
+ * Tracks the single active import job and its accumulated progress, AND owns the
+ * client library writes for a bulk import. The download dialog calls `startJob`
+ * on `POST /api/import`, then feeds each SSE {@link ImportEvent} through
+ * `applyEvent`; `clearJob` resets between imports.
+ *
+ * The server now STREAMS games instead of persisting them, so `applyEvent` writes
+ * into IndexedDB: a `collection` frame creates the collection, each `game` frame
+ * is deduped by content hash and stored (or counted as skipped), and `done`
+ * recounts (and drops an empty) collection. `imported`/`skipped` are computed
+ * here from the client's own dedup; `failed`/`total` come from the server.
  */
 export interface ImportState {
   job: ImportJobState | null;
   startJob: (jobId: string, source: string) => void;
-  applyEvent: (event: ImportEvent) => void;
+  applyEvent: (event: ImportEvent) => Promise<void>;
   clearJob: () => void;
 }
 
-export const useImportStore = create<ImportState>((set) => ({
-  job: null,
-  startJob: (jobId, source) =>
-    set({
-      job: {
-        jobId,
-        source,
-        status: "running",
-        progress: { ...ZERO_PROGRESS },
-      },
-    }),
-  applyEvent: (event) =>
-    set((s) => {
-      if (!s.job) return s;
-      switch (event.type) {
-        case "progress":
-          return {
-            job: {
-              ...s.job,
-              progress: {
-                imported: event.imported,
-                skipped: event.skipped,
-                failed: event.failed,
-                total: event.total ?? s.job.progress.total,
-              },
-            },
-          };
-        case "done":
-          return {
-            job: {
-              ...s.job,
-              status: "done",
-              collectionId: event.collectionId,
-              progress: {
-                imported: event.imported,
-                skipped: event.skipped,
-                failed: event.failed,
-                total: s.job.progress.total,
-              },
-            },
-          };
-        case "error":
-          return {
-            job: { ...s.job, status: "error", error: event.message },
-          };
-        // `game` events carry a per-game summary; the running counts already
-        // arrive via `progress`, so nothing to fold in here.
-        default:
-          return s;
+export const useImportStore = create<ImportState>((set, get) => {
+  // Serialize the async IDB writes. SSE frames arrive in order, but each handler
+  // now awaits IndexedDB — chaining them onto a single promise keeps writes (and
+  // the counts) in arrival order rather than letting overlapping awaits reorder.
+  let queue: Promise<void> = Promise.resolve();
+  // A strictly-increasing timestamp so games in one batch get distinct, ordered
+  // `createdAt`s. A shared Date.now() for the whole batch would make newest-first
+  // library ordering non-deterministic within the batch. Seeded per job from the
+  // wall clock, never regressing below the last value used.
+  let createdAtSeq = Date.now();
+
+  /** Fold one import event into the store + client library (runs serialized). */
+  async function handle(event: ImportEvent): Promise<void> {
+    const job = get().job;
+    if (!job) return;
+    switch (event.type) {
+      case "collection": {
+        await collectionsRepo.put(event.collection);
+        set((s) =>
+          s.job ? { job: { ...s.job, collectionId: event.collection.id } } : s,
+        );
+        return;
       }
-    }),
-  clearJob: () => set({ job: null }),
-}));
+      case "game": {
+        if (await gamesRepo.existsByHash(event.contentHash)) {
+          set((s) =>
+            s.job
+              ? {
+                  job: {
+                    ...s.job,
+                    progress: {
+                      ...s.job.progress,
+                      skipped: s.job.progress.skipped + 1,
+                    },
+                  },
+                }
+              : s,
+          );
+          return;
+        }
+        const collectionId = job.collectionId;
+        // A bare URL/paste with no collection is provenance `'manual'` (matching
+        // the single-game import); grouped/remote imports carry the real source.
+        const source: ImportSource =
+          job.source === "url" && !collectionId
+            ? "manual"
+            : (job.source as ImportSource);
+        await gamesRepo.put(event.game, {
+          source,
+          collectionId,
+          createdAt: createdAtSeq++,
+          contentHash: event.contentHash,
+        });
+        set((s) =>
+          s.job
+            ? {
+                job: {
+                  ...s.job,
+                  progress: {
+                    ...s.job.progress,
+                    imported: s.job.progress.imported + 1,
+                  },
+                },
+              }
+            : s,
+        );
+        return;
+      }
+      case "progress": {
+        set((s) =>
+          s.job
+            ? {
+                job: {
+                  ...s.job,
+                  progress: {
+                    ...s.job.progress,
+                    failed: event.failed,
+                    total: event.total ?? s.job.progress.total,
+                  },
+                },
+              }
+            : s,
+        );
+        return;
+      }
+      case "done": {
+        let collectionId = job.collectionId;
+        if (collectionId) {
+          await collectionsRepo.recountGames(collectionId);
+          const collection = await collectionsRepo.get(collectionId);
+          // Nothing landed in the up-front collection → drop it (mirrors the old
+          // server-side "nothing imported, delete the empty collection").
+          if (collection && collection.gameCount === 0) {
+            await collectionsRepo.delete(collectionId);
+            collectionId = undefined;
+          }
+        }
+        set((s) =>
+          s.job
+            ? {
+                job: {
+                  ...s.job,
+                  status: "done",
+                  collectionId,
+                  progress: {
+                    ...s.job.progress,
+                    failed: event.failed,
+                  },
+                },
+              }
+            : s,
+        );
+        return;
+      }
+      case "error": {
+        const collectionId = job.collectionId;
+        // The server only emits `error` before any game streamed, so an up-front
+        // collection (written on the `collection` frame) is empty — drop it.
+        if (collectionId) await collectionsRepo.delete(collectionId);
+        set((s) =>
+          s.job
+            ? {
+                job: {
+                  ...s.job,
+                  status: "error",
+                  collectionId: undefined,
+                  error: event.message,
+                },
+              }
+            : s,
+        );
+        return;
+      }
+    }
+  }
+
+  return {
+    job: null,
+    startJob: (jobId, source) => {
+      createdAtSeq = Math.max(createdAtSeq, Date.now());
+      set({
+        job: {
+          jobId,
+          source,
+          status: "running",
+          progress: { ...ZERO_PROGRESS },
+        },
+      });
+    },
+    // Enqueue behind any in-flight event so writes stay ordered. Returns the tail
+    // so callers (and tests) can await this event's completion; failures are
+    // logged, not propagated, so one bad frame can't wedge the queue.
+    applyEvent: (event) => {
+      const next = queue
+        .then(() => handle(event))
+        .catch((err) => {
+          console.error("Failed to apply import event", err);
+        });
+      queue = next;
+      return next;
+    },
+    clearJob: () => set({ job: null }),
+  };
+});
 
 export interface AnalyzerState {
   game: Game | null;

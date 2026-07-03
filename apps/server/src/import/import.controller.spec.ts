@@ -3,7 +3,6 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import type { ImportJob } from '@chess/shared';
 import { PersistenceModule } from '../persistence/persistence.module';
-import { GamesRepository } from '../persistence/games.repository';
 import { ImportModule } from './import.module';
 
 const A =
@@ -23,20 +22,20 @@ const sleep = (ms: number): Promise<void> =>
 
 /**
  * Controller-level e2e for the import REST surface. A fresh in-memory SQLite DB
- * (NODE_ENV==='test') is opened by PersistenceModule; we drive the `url`/paste
- * source end-to-end (no network — pasted PGN), poll the job to completion, and
- * verify the games landed in the library via the real GamesRepository.
+ * (NODE_ENV==='test') is opened by PersistenceModule (still needed for the
+ * import-jobs row / poll fallback); we drive the `url`/paste source end-to-end
+ * (no network — pasted PGN) and poll the job to completion. Games are no longer
+ * persisted server-side — they are streamed to the client — so the job counts
+ * (not a library query) are what we assert.
  */
 describe('Import REST API (e2e)', () => {
   let app: INestApplication;
-  let games: GamesRepository;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [PersistenceModule, ImportModule],
     }).compile();
 
-    games = moduleRef.get(GamesRepository);
     app = moduleRef.createNestApplication();
     await app.init();
   });
@@ -88,25 +87,25 @@ describe('Import REST API (e2e)', () => {
 
       const job = await pollUntilDone(jobId);
       expect(job.status).toBe('done');
+      // The server streams both games; imported = games streamed, skipped is
+      // always 0 (the client dedups against its own library, not the server).
       expect(job.imported).toBe(2);
       expect(job.skipped).toBe(0);
       expect(job.failed).toBe(0);
       expect(job.collectionId).toBeDefined();
-
-      // The imported games are now searchable in the library.
-      const page = games.searchSummaries({ collectionId: job.collectionId });
-      expect(page.total).toBe(2);
     });
 
-    it('skips duplicates on a re-import of the same paste', async () => {
+    it('re-streams the same paste without server-side dedup', async () => {
       const start = await request(app.getHttpServer())
         .post('/import')
         .send({ source: 'url', pgn: PASTE })
         .expect(201);
       const job = await pollUntilDone(start.body.jobId);
+      // The server keeps no state across imports, so it re-streams both games;
+      // deduplication now lives on the client.
       expect(job.status).toBe('done');
-      expect(job.imported).toBe(0);
-      expect(job.skipped).toBe(2);
+      expect(job.imported).toBe(2);
+      expect(job.skipped).toBe(0);
     });
   });
 

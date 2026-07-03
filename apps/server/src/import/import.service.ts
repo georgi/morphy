@@ -1,17 +1,16 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { Observable, Subject } from 'rxjs';
 import { map } from 'rxjs/operators';
 import type { MessageEvent } from '@nestjs/common';
 import type {
+  Collection,
   Game,
-  GameSummary,
   ImportEvent,
   ImportSource,
   StartImportRequest,
 } from '@chess/shared';
 import { ChessService } from '../chess/chess.service';
-import { GamesRepository } from '../persistence/games.repository';
-import { CollectionsRepository } from '../persistence/collections.repository';
 import { ImportJobsRepository } from '../persistence/import-jobs.repository';
 import type { GameSource } from './game-source';
 import { UrlSource } from './sources/url.source';
@@ -40,6 +39,11 @@ interface Counts {
  *
  * All four sources are wired: `url` (paste / arbitrary PGN URL) plus the remote
  * providers `lichess`, `chesscom`, and `catalog` (see {@link resolveSource}).
+ *
+ * The server no longer persists imported games or collections: it parses each
+ * game, computes its content hash, and STREAMS the full {@link Game} (plus a
+ * `collection` frame up front for grouped imports) to the client, which dedups
+ * and writes into IndexedDB. The job row / SSE machinery stays for progress.
  */
 @Injectable()
 export class ImportService {
@@ -49,8 +53,6 @@ export class ImportService {
 
   constructor(
     private readonly chess: ChessService,
-    private readonly games: GamesRepository,
-    private readonly collections: CollectionsRepository,
     private readonly jobs: ImportJobsRepository,
     private readonly urlSource: UrlSource,
     private readonly lichessSource: LichessSource,
@@ -60,8 +62,9 @@ export class ImportService {
 
   /**
    * Begin an import. Creates the job row, opens its event stream, optionally
-   * creates a collection up front (named URL imports / remote providers), and
-   * launches the pipeline in the background. Returns the new job id.
+   * describes a collection up front (named URL imports / remote providers) —
+   * emitted to the client, not persisted here — and launches the pipeline in the
+   * background. Returns the new job id.
    *
    * @throws BadRequestException when the request is malformed (no resolvable
    *   source) — the only synchronous validation; all per-game and source-level
@@ -70,12 +73,12 @@ export class ImportService {
   start(req: StartImportRequest): { jobId: string } {
     const source = this.resolveSource(req);
 
-    const collectionId = this.maybeCreateCollection(req);
+    const collection = this.buildCollection(req);
     const job = this.jobs.create({
       source: req.source as ImportSource,
       params: req,
       status: 'running',
-      collectionId,
+      collectionId: collection?.id,
     });
 
     // The Subject must exist before the (sync-started) pipeline emits, so an SSE
@@ -83,7 +86,7 @@ export class ImportService {
     this.streams.set(job.id, new Subject<ImportEvent>());
 
     // Fire and forget: the request returns now; progress flows over SSE / poll.
-    void this.runPipeline(job.id, source, req, collectionId, req.source);
+    void this.runPipeline(job.id, source, req, collection);
 
     return { jobId: job.id };
   }
@@ -130,26 +133,34 @@ export class ImportService {
   // ── pipeline ───────────────────────────────────────────────────────────────
 
   /**
-   * The single import path (SPEC §5). Iterates the source's PGN stream; per game
-   * parses → hashes → dedups → inserts, counting imported/skipped/failed and
-   * emitting progress. A source-level failure before any game ends the job as
-   * `error`; otherwise it ends `done` (partial success still counts).
+   * The single import path (SPEC §5). Emits a `collection` frame up front (for
+   * grouped imports), then iterates the source's PGN stream; per game it parses →
+   * hashes → emits the full {@link Game} for the client to dedup and store,
+   * counting parsed/failed and emitting progress. A source-level failure before
+   * any game ends the job as `error`; otherwise it ends `done` (partial success
+   * still counts). Nothing is persisted server-side.
    */
   private async runPipeline(
     jobId: string,
     source: GameSource,
     req: StartImportRequest,
-    collectionId: string | undefined,
-    importSource: ImportSource,
+    collection: Collection | undefined,
   ): Promise<void> {
     const counts: Counts = { imported: 0, skipped: 0, failed: 0 };
     const errorSample: string[] = [];
     let sawAnyGame = false;
 
+    // Defer past `start`'s synchronous return so a subscriber that attaches
+    // immediately still receives the up-front `collection` frame.
+    await tick();
+    if (collection) {
+      this.emit(jobId, { type: 'collection', collection });
+    }
+
     try {
       for await (const pgn of source.fetch(req)) {
         sawAnyGame = true;
-        this.ingest(jobId, pgn, collectionId, importSource, counts, errorSample);
+        this.ingest(jobId, pgn, counts, errorSample);
         this.emit(jobId, {
           type: 'progress',
           imported: counts.imported,
@@ -157,38 +168,33 @@ export class ImportService {
           failed: counts.failed,
         });
         this.jobs.update(jobId, { ...counts });
-        // Yield: better-sqlite3 is synchronous; don't starve SSE/HTTP.
+        // Yield so a synchronous source doesn't starve SSE/HTTP.
         await tick();
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // A source failure after some games were imported is a partial success;
-      // only a failure before the first game is a hard job error.
+      // A source failure after some games were streamed is a partial success;
+      // only a failure before the first game is a hard job error. The client
+      // drops any orphaned up-front collection on the `error` frame.
       if (!sawAnyGame) {
-        // Nothing was imported and a collection was created up front (remote /
-        // named imports) — drop the empty collection so it doesn't litter the
-        // sidebar. No games reference it yet, so the delete is safe.
-        if (collectionId) this.collections.delete(collectionId);
         this.finishError(jobId, message);
         return;
       }
       if (errorSample.length < ERROR_SAMPLE_CAP) errorSample.push(message);
     }
 
-    if (collectionId) this.collections.recountGames(collectionId);
-    this.finishDone(jobId, counts, errorSample, collectionId);
+    this.finishDone(jobId, counts, errorSample, collection?.id);
   }
 
   /**
-   * Import one game's PGN into the pipeline: parse, hash, dedup, insert. Mutates
-   * `counts` and emits a `game` event on a fresh insert. Parse errors are caught
-   * here (counted as `failed`, sampled) and never abort the job.
+   * Parse one game's PGN and stream it to the client. Mutates `counts` and emits
+   * a `game` event carrying the full {@link Game} plus its {@link contentHash}
+   * (the client dedups; the server does not). Parse errors are caught here
+   * (counted as `failed`, sampled) and never abort the job.
    */
   private ingest(
     jobId: string,
     pgn: string,
-    collectionId: string | undefined,
-    importSource: ImportSource,
     counts: Counts,
     errorSample: string[],
   ): void {
@@ -203,27 +209,10 @@ export class ImportService {
       return;
     }
 
-    const hash = contentHash(game);
-    if (this.games.existsByHash(hash)) {
-      counts.skipped += 1;
-      return;
-    }
-
-    // A bare URL/paste import with no collection stays `'manual'` (matching the
-    // single-game `POST /api/games` provenance); remote providers and named/
-    // grouped imports tag the game with the real source.
-    const source: ImportSource =
-      importSource === 'url' && !collectionId ? 'manual' : importSource;
-    this.games.create(game, {
-      source,
-      collectionId: collectionId ?? null,
-      contentHash: hash,
-    });
+    // `imported` here is the count of games the server STREAMED. The client
+    // recomputes imported-vs-skipped from its own dedup as it stores them.
     counts.imported += 1;
-    this.emit(jobId, {
-      type: 'game',
-      summary: this.summarize(game, source, collectionId),
-    });
+    this.emit(jobId, { type: 'game', game, contentHash: contentHash(game) });
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -247,71 +236,55 @@ export class ImportService {
   }
 
   /**
-   * Create a collection up front when the import is named/grouped (SPEC §5).
-   * Remote providers (`lichess` / `chesscom` / `catalog`) always get a collection
-   * so their games are browsable as a group; URL imports only get one when
-   * `collectionName` is supplied; bare pastes/URLs import with `collection_id =
-   * null`.
+   * Describe the collection to stream up front when the import is named/grouped
+   * (SPEC §5). Remote providers (`lichess` / `chesscom` / `catalog`) always get a
+   * collection so their games are browsable as a group; URL imports only get one
+   * when `collectionName` is supplied; bare pastes/URLs stream with no collection.
+   * The returned {@link Collection} is emitted to the client (which persists it) —
+   * the server does not touch a database here.
    */
-  private maybeCreateCollection(req: StartImportRequest): string | undefined {
+  private buildCollection(req: StartImportRequest): Collection | undefined {
+    const base = { id: randomUUID(), gameCount: 0, createdAt: Date.now() };
     switch (req.source) {
       case 'url':
         if (!req.collectionName?.trim()) return undefined;
-        return this.collections.create({
+        return {
+          ...base,
           name: req.collectionName.trim(),
           source: 'url',
           sourceRef: req.url?.trim(),
-        }).id;
+        };
 
       case 'lichess':
-        return this.collections.create({
+        return {
+          ...base,
           name: `Lichess ${req.kind}: ${req.id}`,
           source: 'lichess',
           sourceRef: `${req.kind}/${req.id}`,
-        }).id;
+        };
 
       case 'chesscom':
-        return this.collections.create({
+        return {
+          ...base,
           name: `Chess.com: ${req.username}`,
           source: 'chesscom',
           sourceRef: req.username,
-        }).id;
+        };
 
       case 'catalog': {
         const entry = findCatalogEntry(req.entryId);
-        return this.collections.create({
+        return {
+          ...base,
           name: entry?.title ?? `Catalog: ${req.entryId}`,
           description: entry?.description,
           source: 'catalog',
           sourceRef: req.entryId,
-        }).id;
+        };
       }
 
       default:
         return undefined;
     }
-  }
-
-  /** Project an inserted {@link Game} into a {@link GameSummary} for a `game` event. */
-  private summarize(
-    game: Game,
-    source: ImportSource,
-    collectionId: string | undefined,
-  ): GameSummary {
-    return {
-      id: game.id,
-      white: game.headers.white,
-      black: game.headers.black,
-      result: game.headers.result,
-      eco: game.headers.eco,
-      opening: game.headers.opening,
-      date: game.headers.date,
-      plyCount: game.moves.length,
-      source,
-      collectionId,
-      hasAnalysis: false,
-      createdAt: Date.now(),
-    };
   }
 
   private emit(jobId: string, event: ImportEvent): void {

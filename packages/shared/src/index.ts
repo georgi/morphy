@@ -191,7 +191,8 @@ export type ImportEvent =
       failed: number;
       total?: number;
     }
-  | { type: "game"; summary: GameSummary }
+  | { type: "game"; game: Game; contentHash: string }
+  | { type: "collection"; collection: Collection }
   | {
       type: "done";
       collectionId?: string;
@@ -204,6 +205,11 @@ export type ImportEvent =
 export interface ImportGameRequest {
   pgn?: string;
   fen?: string;
+}
+/** Response for `POST /api/games`: the parsed game plus its dedup content hash. */
+export interface ImportGameResponse {
+  game: Game;
+  contentHash: string;
 }
 export interface AnalyzePositionRequest {
   fen: string;

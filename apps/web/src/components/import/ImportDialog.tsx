@@ -33,6 +33,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
 import { ApiError } from "@/lib/api";
+import { gamesRepo } from "@/lib/db/games-repo";
 import { useAnalyzerStore, useImportStore } from "@/store";
 
 /**
@@ -160,16 +161,21 @@ export function ImportDialog() {
     onSuccess: ({ jobId }, body) => {
       closeStream();
       startJob(jobId, body.source);
-      sourceRef.current = api.openImportStream(jobId, (event) => {
-        applyEvent(event);
+      sourceRef.current = api.openImportStream(jobId, async (event) => {
+        // Await the (serialized) IDB write for this frame before acting on a
+        // terminal event, so the library/collections are settled before we
+        // invalidate queries and report the final counts.
+        await applyEvent(event);
         if (event.type === "done") {
           closeStream();
           void queryClient.invalidateQueries({ queryKey: ["library"] });
           void queryClient.invalidateQueries({ queryKey: ["collections"] });
+          // Report the CLIENT's deduped counts, not the server's raw stream count.
+          const p = useImportStore.getState().job?.progress;
           const parts = [
-            `${event.imported} imported`,
-            event.skipped ? `${event.skipped} skipped` : null,
-            event.failed ? `${event.failed} failed` : null,
+            `${p?.imported ?? 0} imported`,
+            p?.skipped ? `${p.skipped} skipped` : null,
+            p?.failed ? `${p.failed} failed` : null,
           ].filter(Boolean);
           toast.success("Import complete", { description: parts.join(", ") });
         } else if (event.type === "error") {
@@ -185,10 +191,21 @@ export function ImportDialog() {
     },
   });
 
-  /** Single-game paste path: load the active game straight into the board. */
+  /** Single-game paste path: persist to the client library, then load it. */
   const loadSingleMutation = useMutation({
     mutationFn: (body: { pgn: string }) => api.importGame(body),
-    onSuccess: (game) => {
+    onSuccess: async ({ game, contentHash }) => {
+      // Store it in the client library (dedup by content hash — the `by-hash`
+      // index is unique, so a re-import must not double-write), then load the
+      // game onto the board regardless of whether it was already present.
+      if (!(await gamesRepo.existsByHash(contentHash))) {
+        await gamesRepo.put(game, {
+          source: "manual",
+          createdAt: Date.now(),
+          contentHash,
+        });
+        void queryClient.invalidateQueries({ queryKey: ["library"] });
+      }
       setGame(game);
       setOpen(false);
       const white = game.headers.white ?? "White";

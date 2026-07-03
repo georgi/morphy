@@ -5,6 +5,7 @@ import type {
   EngineEval,
   MoveEval,
   ImportGameRequest,
+  ImportGameResponse,
   AnalyzePositionRequest,
   AnalyzeGameRequest,
   KeyMomentsRequest,
@@ -62,8 +63,15 @@ async function extractError(res: Response): Promise<string> {
   return res.statusText || `Request failed (${res.status})`;
 }
 
-export function importGame(body: ImportGameRequest): Promise<Game> {
-  return request<Game>("/games", {
+/**
+ * Import a single game from PGN/FEN. The server parses it and returns the game
+ * plus its content hash (no server persistence); the caller writes it into the
+ * client library.
+ */
+export function importGame(
+  body: ImportGameRequest,
+): Promise<ImportGameResponse> {
+  return request<ImportGameResponse>("/games", {
     method: "POST",
     body: JSON.stringify(body),
   });
