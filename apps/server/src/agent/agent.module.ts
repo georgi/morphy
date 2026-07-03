@@ -1,13 +1,14 @@
-import { Module } from '@nestjs/common';
-import { ChessModule } from '../chess/chess.module';
-import { AnalysisModule } from '../analysis/analysis.module';
-import { LibraryModule } from '../library/library.module';
-import { ChessToolsService } from './chess-tools.service';
-import { AgentService } from './agent.service';
-import { AgentController } from './agent.controller';
-import { AGENT_HARNESS, type AgentHarness } from './harness/agent-harness';
-import { PiHarness } from './harness/pi-harness';
-import { ClaudeHarness } from './harness/claude-harness';
+import { Module } from "@nestjs/common";
+import { ChessModule } from "../chess/chess.module";
+import { AnalysisModule } from "../analysis/analysis.module";
+import { LibraryModule } from "../library/library.module";
+import { ChessToolsService } from "./chess-tools.service";
+import { AgentService } from "./agent.service";
+import { AgentController } from "./agent.controller";
+import { AGENT_HARNESS, type AgentHarness } from "./harness/agent-harness";
+import { PiHarness } from "./harness/pi-harness";
+import { ClaudeHarness } from "./harness/claude-harness";
+import { MODEL_FILTER, createModelFilterFromEnv } from "./model-filter";
 
 /**
  * Select the agent backend from the environment. `AGENT_BACKEND=claude` picks the
@@ -18,8 +19,8 @@ import { ClaudeHarness } from './harness/claude-harness';
 export function createHarnessFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): AgentHarness {
-  const backend = (env.AGENT_BACKEND ?? 'pi').toLowerCase();
-  return backend === 'claude' ? new ClaudeHarness() : new PiHarness();
+  const backend = (env.AGENT_BACKEND ?? "pi").toLowerCase();
+  return backend === "claude" ? new ClaudeHarness() : new PiHarness();
 }
 
 /**
@@ -39,6 +40,7 @@ export function createHarnessFromEnv(
     ChessToolsService,
     AgentService,
     { provide: AGENT_HARNESS, useFactory: () => createHarnessFromEnv() },
+    { provide: MODEL_FILTER, useFactory: () => createModelFilterFromEnv() },
   ],
   exports: [AgentService],
 })

@@ -1,7 +1,7 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
-import { Observable, Subject } from 'rxjs';
-import { map } from 'rxjs/operators';
-import type { MessageEvent } from '@nestjs/common';
+import { Inject, Injectable, Logger } from "@nestjs/common";
+import { Observable, Subject } from "rxjs";
+import { map } from "rxjs/operators";
+import type { MessageEvent } from "@nestjs/common";
 import type {
   AgentEvent,
   AgentMessageRequest,
@@ -9,15 +9,19 @@ import type {
   ModelInfo,
   SessionSummary,
   TranscriptMessage,
-} from '@chess/shared';
-import { ChessService } from '../chess/chess.service';
-import { GameStore } from '../chess/game.store';
-import { ChessToolsService, type ToolSessionContext } from './chess-tools.service';
+} from "@chess/shared";
+import { ChessService } from "../chess/chess.service";
+import { GameStore } from "../chess/game.store";
+import {
+  ChessToolsService,
+  type ToolSessionContext,
+} from "./chess-tools.service";
 import {
   AGENT_HARNESS,
   type AgentHarness,
   type AgentRunner,
-} from './harness/agent-harness';
+} from "./harness/agent-harness";
+import { MODEL_FILTER, type ModelFilter } from "./model-filter";
 
 /** Options threaded from the SSE query string into session creation. */
 interface StreamOptions {
@@ -84,11 +88,15 @@ export class AgentService {
     private readonly chess: ChessService,
     private readonly store: GameStore,
     @Inject(AGENT_HARNESS) private readonly harness: AgentHarness,
+    @Inject(MODEL_FILTER) private readonly modelFilter: ModelFilter,
   ) {}
 
-  /** List the models the active backend offers, for the model picker. */
-  listModels(): Promise<ModelInfo[]> {
-    return this.harness.listModels();
+  /**
+   * List the models the picker may offer: the active backend's models, narrowed by
+   * the {@link ModelFilter} access policy (e.g. OpenRouter free tier in production).
+   */
+  async listModels(): Promise<ModelInfo[]> {
+    return this.modelFilter.apply(await this.harness.listModels());
   }
 
   /** List the active backend's stored sessions, for the continue UI. */
@@ -107,22 +115,19 @@ export class AgentService {
    * to the `{ data }` shape NestJS @Sse expects. `opts.model`/`opts.resume` thread
    * into session creation (only honored on the first, creating access).
    */
-  getStream(
-    sessionId: string,
-    opts?: StreamOptions,
-  ): Observable<MessageEvent> {
+  getStream(sessionId: string, opts?: StreamOptions): Observable<MessageEvent> {
     const subject = this.ensureSubject(sessionId);
     // Kick off session creation eagerly so tools/prompt are ready by the time a
     // message is posted. Errors are surfaced onto the stream as an error event.
     void this.ensureSession(sessionId, opts).catch((err) => {
       subject.next({
-        type: 'error',
+        type: "error",
         message: err instanceof Error ? err.message : String(err),
       });
     });
-    return subject.asObservable().pipe(
-      map((event): MessageEvent => ({ data: JSON.stringify(event) })),
-    );
+    return subject
+      .asObservable()
+      .pipe(map((event): MessageEvent => ({ data: JSON.stringify(event) })));
   }
 
   /**
@@ -143,10 +148,10 @@ export class AgentService {
       // The harness resolves on turn completion and throws on a failed turn (the
       // backend's error surfacing lives behind the interface now).
       await state.runner.prompt(prompt);
-      state.subject.next({ type: 'done' });
+      state.subject.next({ type: "done" });
     } catch (err) {
       state.subject.next({
-        type: 'error',
+        type: "error",
         message: err instanceof Error ? err.message : String(err),
       });
     }
@@ -220,13 +225,33 @@ export class AgentService {
       systemPrompt: SYSTEM_PROMPT,
       tools,
       emit: (event: AgentEvent) => subject.next(event),
-      model: opts?.model,
+      model: await this.resolveModel(opts?.model),
     };
     const runner = opts?.resume
       ? await this.harness.resumeSession(opts.resume, cfg)
       : await this.harness.createSession(cfg);
 
     return { runner, subject, context };
+  }
+
+  /**
+   * Resolve the model a session is created with under the access policy. When the
+   * policy is unrestricted the request passes through unchanged (`undefined` → the
+   * harness default). When restricted, a permitted requested id is honored; anything
+   * else — a disallowed id, or no explicit choice (whose harness default could be a
+   * paid model) — falls back to the first permitted model. Throws when the policy
+   * permits nothing, surfaced onto the stream as an `error` event by getStream.
+   */
+  private async resolveModel(requested?: string): Promise<string | undefined> {
+    if (!this.modelFilter.restricted) return requested;
+    if (requested && this.modelFilter.allows(requested)) return requested;
+    const [fallback] = await this.listModels();
+    if (!fallback) {
+      throw new Error(
+        "No permitted models are available (AGENT_MODEL_FILTER restricts the model list).",
+      );
+    }
+    return fallback.id;
   }
 
   // ── prompt building ──────────────────────────────────────────────────────
@@ -245,17 +270,17 @@ export class AgentService {
     const recent = this.recentMoves(game, ply);
 
     const contextLines = [
-      'Current context (the user is viewing this position):',
+      "Current context (the user is viewing this position):",
       `- gameId: ${game.id}`,
       `- ply: ${ply} of ${game.moves.length}`,
       `- FEN: ${fen}`,
       recent ? `- recent moves: ${recent}` : null,
       game.headers.opening
-        ? `- opening: ${[game.headers.eco, game.headers.opening].filter(Boolean).join(' ')}`
+        ? `- opening: ${[game.headers.eco, game.headers.opening].filter(Boolean).join(" ")}`
         : null,
     ]
       .filter(Boolean)
-      .join('\n');
+      .join("\n");
 
     return `${contextLines}\n\nUser: ${body.text}`;
   }
@@ -263,12 +288,15 @@ export class AgentService {
   /** A compact SAN trail of the moves leading up to `ply`, with move numbers. */
   private recentMoves(game: Game, ply: number): string {
     const upto = Math.max(0, Math.min(ply, game.moves.length));
-    const slice = game.moves.slice(Math.max(0, upto - RECENT_MOVES_IN_CONTEXT), upto);
+    const slice = game.moves.slice(
+      Math.max(0, upto - RECENT_MOVES_IN_CONTEXT),
+      upto,
+    );
     return slice
       .map((m) => {
-        const num = m.color === 'w' ? `${m.moveNumber}.` : `${m.moveNumber}...`;
+        const num = m.color === "w" ? `${m.moveNumber}.` : `${m.moveNumber}...`;
         return `${num}${m.san}`;
       })
-      .join(' ');
+      .join(" ");
   }
 }
