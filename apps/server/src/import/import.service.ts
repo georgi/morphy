@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { Observable, Subject } from 'rxjs';
+import { EMPTY, Observable, ReplaySubject } from 'rxjs';
 import { map } from 'rxjs/operators';
 import type { MessageEvent } from '@nestjs/common';
 import type {
@@ -34,8 +34,9 @@ interface Counts {
  * Bulk-import orchestrator. `start` creates a `running` job row, resolves the
  * {@link GameSource} for the request, kicks off the pipeline **without awaiting**
  * it, and returns `{ jobId }` immediately so the HTTP request returns fast. The
- * pipeline streams {@link ImportEvent}s onto a per-job RxJS Subject (read by the
- * SSE endpoint) and persists progress to the job row (the poll fallback).
+ * pipeline streams {@link ImportEvent}s onto a per-job RxJS `ReplaySubject`
+ * (read by the SSE endpoint, buffered so late subscribers still see every
+ * frame) and persists progress to the job row (the poll fallback).
  *
  * All four sources are wired: `url` (paste / arbitrary PGN URL) plus the remote
  * providers `lichess`, `chesscom`, and `catalog` (see {@link resolveSource}).
@@ -48,8 +49,30 @@ interface Counts {
 @Injectable()
 export class ImportService {
   private readonly logger = new Logger(ImportService.name);
-  /** Per-job event channels. Kept until the job ends, then completed + dropped. */
-  private readonly streams = new Map<string, Subject<ImportEvent>>();
+  /**
+   * Per-job event channels. Each channel is a `ReplaySubject` that buffers
+   * EVERY frame — `collection`, every `game`, and the terminal `done`/`error`
+   * — for the job's whole lifetime, not just the live ones.
+   *
+   * That buffering is what makes a late subscriber correct: the browser only
+   * opens its `EventSource` after the `POST /import` response round-trips, so
+   * a fast/inline import (pasted PGN, no network fetch) can emit its entire
+   * frame sequence — or finish outright — before anyone is listening. A plain
+   * `Subject` drops those frames on the floor (silent data loss: the client
+   * ends up with nothing imported and no error). A `ReplaySubject` replays its
+   * buffer to any subscriber that attaches later, including after the subject
+   * has completed (a completed `ReplaySubject` still replays the buffer to a
+   * new subscriber before signalling `complete`), so `getStream` can use the
+   * exact same channel for both live and post-completion subscribers — no
+   * separate terminal-frame-replay path needed.
+   *
+   * Entries are kept for the life of the process (never deleted — mirrors
+   * `ImportJobsRepository`, which is the same kind of unbounded in-memory
+   * store). Memory tradeoff: this buffers full `Game` payloads per job for as
+   * long as the process runs, which is fine for ephemeral, bounded bulk
+   * imports but would need eviction/TTL for a long-lived multi-tenant server.
+   */
+  private readonly streams = new Map<string, ReplaySubject<ImportEvent>>();
 
   constructor(
     private readonly chess: ChessService,
@@ -81,9 +104,11 @@ export class ImportService {
       collectionId: collection?.id,
     });
 
-    // The Subject must exist before the (sync-started) pipeline emits, so an SSE
-    // client that connects between `start` and the first tick still sees events.
-    this.streams.set(job.id, new Subject<ImportEvent>());
+    // The ReplaySubject must exist before the (sync-started) pipeline emits,
+    // so an SSE client that connects between `start` and the first tick still
+    // sees events — and any client that connects even later still replays
+    // them from the buffer. Unbounded: buffer every frame for the job's life.
+    this.streams.set(job.id, new ReplaySubject<ImportEvent>());
 
     // Fire and forget: the request returns now; progress flows over SSE / poll.
     void this.runPipeline(job.id, source, req, collection);
@@ -93,41 +118,20 @@ export class ImportService {
 
   /**
    * SSE source for a job. Maps each {@link ImportEvent} to the `{ data }` shape
-   * `@Sse` expects. If the job already finished (stream completed), returns an
-   * empty stream — clients should fall back to `GET /api/import/:jobId`.
+   * `@Sse` expects. The job's channel is a `ReplaySubject` that buffers its full
+   * frame history, so this behaves identically whether the subscriber attaches
+   * while the pipeline is still running or after it has already finished
+   * (`done`/`error`) — either way it replays every frame in order, then
+   * completes. Unknown job ids (never started, or from a previous process —
+   * job state is in-memory only) get an immediately-completed empty stream;
+   * clients fall back to `GET /api/import/:jobId`.
    */
   getStream(jobId: string): Observable<MessageEvent> {
-    const live = this.streams.get(jobId);
-    const events = live ? live.asObservable() : this.replayTerminal(jobId);
+    const stream = this.streams.get(jobId);
+    const events = stream ? stream.asObservable() : EMPTY;
     return events.pipe(
       map((event): MessageEvent => ({ data: JSON.stringify(event) })),
     );
-  }
-
-  /**
-   * Reconnect path: no live channel exists for this job, so it has already
-   * finished (a fast import can complete before the browser opens the stream) —
-   * or never existed. If the persisted job row is terminal, synthesize and replay
-   * its single `done`/`error` frame so a late subscriber resolves instead of
-   * hanging forever; otherwise emit nothing and complete (the client falls back
-   * to `GET /api/import/:jobId`).
-   */
-  private replayTerminal(jobId: string): Observable<ImportEvent> {
-    const job = this.jobs.get(jobId);
-    return new Observable<ImportEvent>((subscriber) => {
-      if (job?.status === 'done') {
-        subscriber.next({
-          type: 'done',
-          collectionId: job.collectionId,
-          imported: job.imported,
-          skipped: job.skipped,
-          failed: job.failed,
-        });
-      } else if (job?.status === 'error') {
-        subscriber.next({ type: 'error', message: job.error ?? 'Import failed.' });
-      }
-      subscriber.complete();
-    });
   }
 
   // ── pipeline ───────────────────────────────────────────────────────────────
@@ -322,12 +326,14 @@ export class ImportService {
     this.closeStream(jobId);
   }
 
+  /**
+   * Signal completion once the terminal frame has been emitted. The subject is
+   * intentionally NOT removed from `streams`: a completed `ReplaySubject`
+   * still replays its buffered history to a subscriber that attaches later, so
+   * keeping the entry around is what makes late subscribers work at all.
+   */
   private closeStream(jobId: string): void {
-    const subject = this.streams.get(jobId);
-    if (subject) {
-      subject.complete();
-      this.streams.delete(jobId);
-    }
+    this.streams.get(jobId)?.complete();
   }
 }
 

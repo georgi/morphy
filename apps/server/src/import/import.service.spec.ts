@@ -89,6 +89,38 @@ function collectEvents(
   });
 }
 
+/**
+ * Wait until the in-memory job row reaches a terminal status, WITHOUT ever
+ * subscribing to the job's stream. Used to simulate the fast-import race: the
+ * pipeline runs to completion — emitting `collection`/`game`/`done` onto a
+ * channel nobody is listening to yet — before a client ever attaches (the
+ * browser only opens its EventSource after the `POST /import` response has
+ * round-tripped).
+ */
+function waitForTerminal(
+  jobs: ImportJobsRepository,
+  jobId: string,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + 2000;
+    const poll = (): void => {
+      const status = jobs.get(jobId)?.status;
+      if (status === 'done' || status === 'error') {
+        resolve();
+        return;
+      }
+      if (Date.now() > deadline) {
+        reject(
+          new Error(`job ${jobId} did not reach a terminal status in time`),
+        );
+        return;
+      }
+      setImmediate(poll);
+    };
+    setImmediate(poll);
+  });
+}
+
 describe('ImportService', () => {
   it('streams a full game + content hash per parsed game and does not dedup', async () => {
     const source = new FixtureSource([GAME_A, GAME_A_DUP, GAME_B, INVALID]);
@@ -266,7 +298,57 @@ describe('ImportService', () => {
     expect(collectionEvent!.collection.name.toLowerCase()).toContain('morphy');
   });
 
-  it('replays the terminal `done` frame to a client that subscribes after the job finished', async () => {
+  it('replays the FULL frame history — collection, every game and the terminal `done` — to a client that subscribes after the job finished (regression: fast imports were silently losing every game frame)', async () => {
+    // This is the exact bug: a fast (no-network, pasted-PGN) import can emit
+    // its whole `collection`/`game`.../`done` sequence before the browser's
+    // EventSource ever attaches (it only opens after the `POST /import`
+    // response round-trips). Every frame emitted before that point must still
+    // be replayed, in order, not just the terminal one.
+    const source = new FixtureSource([GAME_A, GAME_B]);
+    const { service, jobs } = makeService(source);
+
+    const { jobId } = service.start({
+      source: 'url',
+      url: 'http://x/a.pgn',
+      collectionName: 'Fast Import',
+    });
+
+    // Nobody subscribes to the stream at all until the whole pipeline —
+    // collection frame, both game frames, done — has already run to
+    // completion in the background.
+    await waitForTerminal(jobs, jobId);
+
+    const replay = await collectEvents(service, jobId);
+    const job = jobs.get(jobId)!;
+
+    expect(replay.map((e) => e.type)).toEqual([
+      'collection',
+      'game',
+      'progress',
+      'game',
+      'progress',
+      'done',
+    ]);
+    expect(replay[0]).toMatchObject({
+      type: 'collection',
+      collection: { id: job.collectionId, name: 'Fast Import' },
+    });
+    const gameEvents = replay.filter((e) => e.type === 'game');
+    expect(gameEvents).toHaveLength(2);
+    for (const e of gameEvents) {
+      expect(e.game).toBeDefined();
+      expect(typeof e.contentHash).toBe('string');
+    }
+    expect(replay[replay.length - 1]).toMatchObject({
+      type: 'done',
+      imported: job.imported,
+      skipped: job.skipped,
+      failed: job.failed,
+      collectionId: job.collectionId,
+    });
+  });
+
+  it('replays the terminal `done` frame — after replaying the buffered collection/game history — to a client that subscribes after the job finished', async () => {
     const source = new FixtureSource([GAME_A, GAME_B]);
     const { service, jobs } = makeService(source);
 
@@ -275,15 +357,25 @@ describe('ImportService', () => {
       url: 'http://x/a.pgn',
       collectionName: 'Late',
     });
-    // Drain the live stream to completion; the live channel is then closed+dropped.
+    // Drain the live stream to completion; the channel stays around (now a
+    // completed ReplaySubject, not deleted) so a later subscriber still gets
+    // the full buffered history.
     await collectEvents(service, jobId);
 
-    // A late subscriber (the real browser SSE race for fast imports) must still
-    // receive a single terminal `done` synthesized from the persisted job row.
+    // A late subscriber (the real browser SSE race for fast imports) must
+    // still receive the entire frame history, terminated by `done` synthesized
+    // from — and matching — the persisted job row.
     const replay = await collectEvents(service, jobId);
     const job = jobs.get(jobId)!;
-    expect(replay).toHaveLength(1);
-    expect(replay[0]).toMatchObject({
+    expect(replay.map((e) => e.type)).toEqual([
+      'collection',
+      'game',
+      'progress',
+      'game',
+      'progress',
+      'done',
+    ]);
+    expect(replay[replay.length - 1]).toMatchObject({
       type: 'done',
       imported: job.imported,
       skipped: job.skipped,
