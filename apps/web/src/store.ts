@@ -94,7 +94,10 @@ export const useLibraryStore = create<LibraryState>((set) => ({
       // A filter/sort change returns to page one. A pure pagination patch
       // ({ offset }) carries its own offset through the spread above — don't
       // clobber it back to the previous page.
-      if (patch.offset === undefined && Object.keys(patch).some(isPageResetKey)) {
+      if (
+        patch.offset === undefined &&
+        Object.keys(patch).some(isPageResetKey)
+      ) {
         query.offset = 0;
       }
       return { query };
@@ -158,6 +161,12 @@ export const useImportStore = create<ImportState>((set, get) => {
   // library ordering non-deterministic within the batch. Seeded per job from the
   // wall clock, never regressing below the last value used.
   let createdAtSeq = Date.now();
+  // Client-side IDB write failures this job (distinct from the server's own
+  // parse-failure count). A `progress`/`done` frame sets `progress.failed` from
+  // `event.failed`, which only knows about server-side failures — folding this
+  // in there too keeps a write failure from being clobbered back to 0 by the
+  // next frame instead of staying visible through to the terminal count.
+  let writeFailures = 0;
 
   /** Fold one import event into the store + client library (runs serialized). */
   async function handle(event: ImportEvent): Promise<void> {
@@ -195,12 +204,33 @@ export const useImportStore = create<ImportState>((set, get) => {
           job.source === "url" && !collectionId
             ? "manual"
             : (job.source as ImportSource);
-        await gamesRepo.put(event.game, {
-          source,
-          collectionId,
-          createdAt: createdAtSeq++,
-          contentHash: event.contentHash,
-        });
+        try {
+          await gamesRepo.put(event.game, {
+            source,
+            collectionId,
+            createdAt: createdAtSeq++,
+            contentHash: event.contentHash,
+          });
+        } catch (err) {
+          // A failed write must not silently drop the game from every count —
+          // surface it as a failure, same as a server-side parse failure.
+          console.error("Failed to write imported game to the library", err);
+          writeFailures += 1;
+          set((s) =>
+            s.job
+              ? {
+                  job: {
+                    ...s.job,
+                    progress: {
+                      ...s.job.progress,
+                      failed: s.job.progress.failed + 1,
+                    },
+                  },
+                }
+              : s,
+          );
+          return;
+        }
         set((s) =>
           s.job
             ? {
@@ -224,7 +254,7 @@ export const useImportStore = create<ImportState>((set, get) => {
                   ...s.job,
                   progress: {
                     ...s.job.progress,
-                    failed: event.failed,
+                    failed: event.failed + writeFailures,
                     total: event.total ?? s.job.progress.total,
                   },
                 },
@@ -236,13 +266,20 @@ export const useImportStore = create<ImportState>((set, get) => {
       case "done": {
         let collectionId = job.collectionId;
         if (collectionId) {
-          await collectionsRepo.recountGames(collectionId);
-          const collection = await collectionsRepo.get(collectionId);
-          // Nothing landed in the up-front collection → drop it (mirrors the old
-          // server-side "nothing imported, delete the empty collection").
-          if (collection && collection.gameCount === 0) {
-            await collectionsRepo.delete(collectionId);
-            collectionId = undefined;
+          try {
+            await collectionsRepo.recountGames(collectionId);
+            const collection = await collectionsRepo.get(collectionId);
+            // Nothing landed in the up-front collection → drop it (mirrors the
+            // old server-side "nothing imported, delete the empty collection").
+            if (collection && collection.gameCount === 0) {
+              await collectionsRepo.delete(collectionId);
+              collectionId = undefined;
+            }
+          } catch (err) {
+            // The terminal status flip below must run regardless — a throw here
+            // must not leave `job.status` stuck on "running" while the caller
+            // (which awaits this frame) goes on to report success.
+            console.error("Failed to finalize the import collection", err);
           }
         }
         set((s) =>
@@ -254,7 +291,7 @@ export const useImportStore = create<ImportState>((set, get) => {
                   collectionId,
                   progress: {
                     ...s.job.progress,
-                    failed: event.failed,
+                    failed: event.failed + writeFailures,
                   },
                 },
               }
@@ -288,6 +325,7 @@ export const useImportStore = create<ImportState>((set, get) => {
     job: null,
     startJob: (jobId, source) => {
       createdAtSeq = Math.max(createdAtSeq, Date.now());
+      writeFailures = 0;
       set({
         job: {
           jobId,
@@ -464,7 +502,10 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
 
   gotoPly: (n) => {
     const s = get();
-    const id = mainlineNodeAtPly({ nodesById: s.nodesById, rootId: s.rootId }, n);
+    const id = mainlineNodeAtPly(
+      { nodesById: s.nodesById, rootId: s.rootId },
+      n,
+    );
     set({ currentNodeId: id, agentFen: null });
   },
 
@@ -586,7 +627,10 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
   setBoardFromAgent: (fen, ply) => {
     const s = get();
     if (ply !== undefined) {
-      const id = mainlineNodeAtPly({ nodesById: s.nodesById, rootId: s.rootId }, ply);
+      const id = mainlineNodeAtPly(
+        { nodesById: s.nodesById, rootId: s.rootId },
+        ply,
+      );
       set({ currentNodeId: id, agentFen: null });
     } else {
       set({ agentFen: fen });

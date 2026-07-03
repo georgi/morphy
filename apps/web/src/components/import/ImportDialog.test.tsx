@@ -1,3 +1,4 @@
+import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -8,7 +9,9 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { CatalogEntry } from "@chess/shared";
+import type { CatalogEntry, Game } from "@chess/shared";
+import { resetLibraryDbForTests } from "@/lib/db/library-db";
+import { gamesRepo } from "@/lib/db/games-repo";
 
 // jsdom lacks the DOM APIs Radix Dialog/Tabs lean on. Stub the few they touch so
 // the real component mounts and its portal content renders.
@@ -46,9 +49,35 @@ vi.mock("@/lib/api", () => ({
 
 import * as api from "@/lib/api";
 const startImport = vi.mocked(api.startImport);
+const importGame = vi.mocked(api.importGame);
+
+const SINGLE_START_FEN =
+  "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+/** A minimal one-ply game for the single-import (`Load to board`) path. */
+function makeGame(id: string): Game {
+  return {
+    id,
+    headers: { white: "Alice", black: "Bob", result: "1-0" },
+    startFen: SINGLE_START_FEN,
+    moves: [
+      {
+        ply: 1,
+        moveNumber: 1,
+        color: "w",
+        san: "e4",
+        uci: "e2e4",
+        fenBefore: SINGLE_START_FEN,
+        fenAfter: SINGLE_START_FEN,
+      },
+    ],
+  };
+}
 
 beforeEach(() => {
+  resetLibraryDbForTests();
   startImport.mockClear();
+  importGame.mockReset();
   vi.stubGlobal("ResizeObserver", StubResizeObserver);
   // Radix uses pointer-capture + scrollIntoView, absent in jsdom.
   if (!Element.prototype.hasPointerCapture) {
@@ -165,10 +194,62 @@ describe("ImportDialog (download dialog)", () => {
         progress: { imported: 3, skipped: 1, failed: 0, total: 8 },
       },
     });
-    await waitFor(() =>
-      expect(screen.getByText("Imported 3")).toBeDefined(),
-    );
+    await waitFor(() => expect(screen.getByText("Imported 3")).toBeDefined());
     expect(screen.getByText("Skipped 1")).toBeDefined();
     expect(screen.getByText("Total 8")).toBeDefined();
+  });
+});
+
+describe("ImportDialog (single-game 'Load to board' path)", () => {
+  /** Paste a PGN and click "Load to board" to fire the single-import mutation. */
+  async function loadToBoard() {
+    fireEvent.change(screen.getByLabelText("PGN paste"), {
+      target: { value: "1. e4 e5 *" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /load to board/i }));
+  }
+
+  it("happy path: writes the returned game to IndexedDB", async () => {
+    const game = makeGame("g1");
+    importGame.mockResolvedValueOnce({ game, contentHash: "hash-1" });
+
+    renderDialog();
+    await openDialog();
+    await loadToBoard();
+
+    await waitFor(async () => {
+      expect(await gamesRepo.get("g1")).toBeDefined();
+    });
+    expect(await gamesRepo.existsByHash("hash-1")).toBe(true);
+  });
+
+  it("skips the write (no duplicate, no thrown ConstraintError) when the contentHash already exists", async () => {
+    const existing = makeGame("existing");
+    await gamesRepo.put(existing, {
+      source: "manual",
+      createdAt: 1,
+      contentHash: "dup-hash",
+    });
+
+    const incoming = makeGame("incoming");
+    importGame.mockResolvedValueOnce({
+      game: incoming,
+      contentHash: "dup-hash",
+    });
+
+    renderDialog();
+    await openDialog();
+    await loadToBoard();
+
+    // The board should still load the incoming game even though it's a dup —
+    // the dialog closes once `setGame`/`setOpen(false)` run in `onSuccess`.
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // The `by-hash` index is unique — a naive put here would throw
+    // ConstraintError. It must be skipped instead, with the original untouched.
+    expect(await gamesRepo.get("incoming")).toBeUndefined();
+    expect(await gamesRepo.get("existing")).toBeDefined();
+    const page = await gamesRepo.search({});
+    expect(page.total).toBe(1);
   });
 });

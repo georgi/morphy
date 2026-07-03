@@ -570,6 +570,106 @@ describe("import job progress", () => {
   });
 });
 
+describe("import write queue (serialization + failure surfacing)", () => {
+  /** A `game` event carrying a game with the given id + a content hash. */
+  function gameEvent(id: string, contentHash: string): ImportEvent {
+    return { type: "game", game: { ...makeGame(), id }, contentHash };
+  }
+
+  beforeEach(() => {
+    resetLibraryDbForTests();
+    useImportStore.setState({ job: null });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("serializes overlapping applyEvent calls so writes land in arrival order", async () => {
+    useImportStore.getState().startJob("job-1", "url");
+    const { applyEvent } = useImportStore.getState();
+
+    // Fire back-to-back WITHOUT awaiting each call — only the store's internal
+    // queue chaining should keep the IDB writes (and counts) in arrival order.
+    void applyEvent(gameEvent("g1", "h1"));
+    void applyEvent(gameEvent("g2", "h2"));
+    const tail = applyEvent(gameEvent("g3", "h3"));
+    await tail;
+
+    const page = await gamesRepo.search({ sort: "createdAt", dir: "asc" });
+    expect(page.games.map((g) => g.id)).toEqual(["g1", "g2", "g3"]);
+    const createdAts = page.games.map((g) => g.createdAt);
+    expect(createdAts[0]).toBeLessThan(createdAts[1]);
+    expect(createdAts[1]).toBeLessThan(createdAts[2]);
+
+    expect(useImportStore.getState().job?.progress).toMatchObject({
+      imported: 3,
+      skipped: 0,
+      failed: 0,
+    });
+  });
+
+  it("a failed write is counted as failed and does not poison the queue for the next frame", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const putSpy = vi
+      .spyOn(gamesRepo, "put")
+      .mockRejectedValueOnce(new Error("write boom"));
+
+    useImportStore.getState().startJob("job-1", "url");
+    const { applyEvent } = useImportStore.getState();
+
+    // The bad frame's write rejects; a following good frame is fired back-to-back
+    // (no await between them) so this also exercises queue serialization.
+    void applyEvent(gameEvent("bad", "hash-bad"));
+    const tail = applyEvent(gameEvent("good", "hash-good"));
+    await tail;
+
+    expect(putSpy).toHaveBeenCalledTimes(2);
+    // The bad frame must not silently vanish — it's counted as failed, not lost
+    // from all three counts.
+    expect(useImportStore.getState().job?.progress).toMatchObject({
+      imported: 1,
+      skipped: 0,
+      failed: 1,
+    });
+    expect(await gamesRepo.get("bad")).toBeUndefined();
+    // The chain must not be poisoned — the following good frame still writes.
+    expect(await gamesRepo.get("good")).toBeDefined();
+  });
+
+  it('done still flips status to "done" when collection bookkeeping throws', async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(collectionsRepo, "recountGames").mockRejectedValueOnce(
+      new Error("recount boom"),
+    );
+
+    useImportStore.getState().startJob("job-1", "lichess");
+    const collection: Collection = {
+      id: "col-1",
+      name: "Collection col-1",
+      source: "lichess",
+      gameCount: 0,
+      createdAt: Date.now(),
+    };
+    await useImportStore
+      .getState()
+      .applyEvent({ type: "collection", collection });
+    await useImportStore.getState().applyEvent(gameEvent("g1", "h1"));
+    // Bookkeeping (recountGames) throws, but the terminal status flip must
+    // still happen — otherwise job.status stays stuck on "running" while the
+    // caller (which awaits this frame) goes on to report success.
+    await useImportStore.getState().applyEvent({
+      type: "done",
+      imported: 1,
+      skipped: 0,
+      failed: 0,
+      collectionId: "col-1",
+    });
+
+    expect(useImportStore.getState().job?.status).toBe("done");
+  });
+});
+
 describe("library query (setQuery)", () => {
   beforeEach(() => {
     useLibraryStore.setState({ query: { ...DEFAULT_LIBRARY_QUERY } });
