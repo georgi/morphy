@@ -64,6 +64,14 @@ describe("ModelFilter.allows (free tier)", () => {
   it("matches the :free suffix case-insensitively", () => {
     expect(filter.allows("Some/Model:FREE")).toBe(true);
   });
+
+  it("permits the openrouter/free auto-router (a free-only router, no :free suffix)", () => {
+    expect(filter.allows("openrouter/free")).toBe(true);
+  });
+
+  it("still rejects openrouter/auto (routes to paid models)", () => {
+    expect(filter.allows("openrouter/auto")).toBe(false);
+  });
 });
 
 describe("ModelFilter (unrestricted) allows everything", () => {

@@ -10,7 +10,11 @@ export const MODEL_FILTER = "MODEL_FILTER";
  * and an explicit `?model=` at session creation.
  */
 function isOpenRouterFree(id: string): boolean {
-  return id.toLowerCase().endsWith(":free");
+  const lower = id.toLowerCase();
+  // `openrouter/free` is OpenRouter's "Free Models Router" — it routes only among
+  // free models, so it belongs to the free tier despite lacking the `:free` suffix.
+  // (`openrouter/auto` is deliberately excluded: it can route to paid models.)
+  return lower === "openrouter/free" || lower.endsWith(":free");
 }
 
 const ALLOW_ALL = (): boolean => true;
