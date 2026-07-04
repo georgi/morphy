@@ -13,6 +13,7 @@ import { EvalBar } from "@/components/board/EvalBar";
 import { BoardControls } from "@/components/board/BoardControls";
 import { BestMoveArrows } from "@/components/board/BestMoveArrows";
 import { CoachBanner } from "@/components/coach/CoachBanner";
+import { boardPlayers, BoardPlayerPlate } from "@/components/board/BoardPlayers";
 import { useBestMoveArrows } from "@/hooks/useBestMoveArrows";
 import * as api from "@/lib/api";
 
@@ -123,6 +124,7 @@ function onFreeMoveDrop({ sourceSquare, targetSquare }: PieceDropHandlerArgs): b
 export function BoardPanel() {
   const fen = useAnalyzerStore(currentFen);
   const orientation = useAnalyzerStore((s) => s.orientation);
+  const game = useAnalyzerStore((s) => s.game);
   const coach = useAnalyzerStore((s) => s.coach);
   const agentFen = useAnalyzerStore((s) => s.agentFen);
   const arrows = useBestMoveArrows();
@@ -142,6 +144,10 @@ export function BoardPanel() {
 
   // ←/→ step, ↑/↓ (Home/End) jump to start/end, f flip, a arrows, m next mistake.
   useBoardShortcuts();
+
+  // Opponent name plates flank the board (top = opponent, bottom = the side you're
+  // viewing from), so they swap when the board is flipped. Only with a game loaded.
+  const players = game ? boardPlayers(game.headers, orientation) : null;
 
   const options: ChessboardOptions = useMemo(() => {
     const base: ChessboardOptions = {
@@ -201,15 +207,21 @@ export function BoardPanel() {
   return (
     <div className="flex h-full flex-col gap-3 p-3">
       {coach.mode !== "idle" && <CoachBanner />}
-      <div className="flex min-h-0 flex-1 items-center justify-center [container-type:size]">
-        {/* The board fills the pane: it's sized to the largest square that fits
-            in BOTH axes — height by the pane height (100cqh), width by the pane
-            width minus the eval bar (w-6) and its gap (gap-3) = 2.25rem. So the
-            board grows with the panel instead of stopping at a fixed cap, while
-            never overflowing the pane vertically. */}
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 [container-type:size]">
+        {/* The eval+board row is sized to the largest square that fits in BOTH axes
+            — height by the pane height minus the two name plates (~2.75rem), width
+            by the pane width minus the eval bar (w-6) and its gap (gap-3) = 2.25rem.
+            So the board grows with the panel yet never overflows the pane. The name
+            plates are indented past the eval bar so they align to the board. */}
+        {players && (
+          <BoardPlayerPlate
+            player={players.top}
+            className="w-full pl-9"
+          />
+        )}
         <div
           className="flex items-stretch gap-3"
-          style={{ height: "min(100cqh, 100cqw - 2.25rem)" }}
+          style={{ height: "min(100cqh - 2.75rem, 100cqw - 2.25rem)" }}
         >
           <EvalBar />
           <div
@@ -225,6 +237,12 @@ export function BoardPanel() {
             />
           </div>
         </div>
+        {players && (
+          <BoardPlayerPlate
+            player={players.bottom}
+            className="w-full pl-9"
+          />
+        )}
       </div>
       <BoardControls />
     </div>
