@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
+import { ImportDialog } from "@/components/import/ImportDialog";
 import { cn } from "@/lib/utils";
 import { gamesRepo } from "@/lib/db/games-repo";
 import { collectionsRepo } from "@/lib/db/collections-repo";
@@ -242,6 +243,7 @@ export function LibraryView() {
           {total} {total === 1 ? "game" : "games"}
         </span>
         <div className="ml-auto flex items-center gap-2">
+          <ImportDialog />
           <Button
             variant="outline"
             size="sm"
