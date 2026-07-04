@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { Loader2 } from "lucide-react";
 import type { Game, KeyMoment, MoveClassification } from "@chess/shared";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAnalyzerStore } from "@/store";
@@ -175,6 +176,10 @@ export function KeyMoments() {
   if (isPending) {
     return (
       <Section>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" />
+          <span>Generating key moments…</span>
+        </div>
         <div className="flex flex-col gap-2">
           <MomentSkeleton />
           <MomentSkeleton />
