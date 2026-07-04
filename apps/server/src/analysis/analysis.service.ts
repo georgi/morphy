@@ -84,17 +84,24 @@ export class AnalysisService {
    * Analyze every ply of a game (sent by value), building the eval curve. Runs
    * each ply through the engine sequentially (the engine serializes internally
    * anyway) and returns the curve — the caller owns persisting it, if at all.
+   *
+   * `onProgress`, when given, is invoked after each ply with the evals gathered
+   * so far and the total ply count, so streaming callers can emit per-ply
+   * progress frames (non-streaming callers simply omit it).
    */
   async analyzeGame(
     game: Game,
     depth = DEFAULT_GAME_DEPTH,
+    onProgress?: (evals: MoveEval[], total: number) => void,
   ): Promise<MoveEval[]> {
     const opts: AnalyzeOptions = { depth };
     const evals: MoveEval[] = [];
+    const total = game.moves.length;
     for (const move of game.moves) {
       const moveEval = await this.evaluateMove(move.fenBefore, move.san, opts);
       // Trust the game's own ply over whatever applySan reconstructed.
       evals.push({ ...moveEval, ply: move.ply });
+      onProgress?.(evals, total);
     }
 
     return evals;

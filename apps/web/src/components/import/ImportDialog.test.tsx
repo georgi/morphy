@@ -48,12 +48,13 @@ vi.mock("@/lib/api", () => ({
   openImportStream: vi.fn(() => ({ close: vi.fn() })),
   getImportJob: vi.fn(),
   analyzeGame: vi.fn(),
+  analyzeGameStream: vi.fn(),
 }));
 
 import * as api from "@/lib/api";
 const startImport = vi.mocked(api.startImport);
 const importGame = vi.mocked(api.importGame);
-const analyzeGame = vi.mocked(api.analyzeGame);
+const analyzeGameStream = vi.mocked(api.analyzeGameStream);
 
 const SINGLE_START_FEN =
   "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -275,7 +276,7 @@ describe("useAnalyzeGame", () => {
   ];
 
   beforeEach(() => {
-    analyzeGame.mockReset();
+    analyzeGameStream.mockReset();
   });
 
   /** Mount the hook with the QueryClientProvider `useMutation` needs. */
@@ -295,6 +296,43 @@ describe("useAnalyzeGame", () => {
     });
   }
 
+  it("reports per-ply progress to the store as Stockfish finishes each move", async () => {
+    const game = makeGame("g1");
+    await gamesRepo.put(game, {
+      source: "manual",
+      createdAt: 1,
+      contentHash: "hash-progress",
+    });
+    useAnalyzerStore.setState({ game });
+    // Simulate a stream that emits one progress frame then stays open until we
+    // resolve it, so the in-flight progress state is observable.
+    let resolveStream!: (evals: MoveEval[]) => void;
+    analyzeGameStream.mockImplementationOnce((_body, onProgress) => {
+      onProgress({ ply: 1, total: 1, eval: sampleEvals[0]! });
+      return new Promise<MoveEval[]>((resolve) => {
+        resolveStream = resolve;
+      });
+    });
+
+    const { result } = renderAnalyzeHook();
+    result.current.analyze();
+
+    // While running, progress + the per-ply eval land in the store.
+    await waitFor(() =>
+      expect(useAnalyzerStore.getState().analysisProgress).toEqual({
+        done: 1,
+        total: 1,
+      }),
+    );
+    expect(useAnalyzerStore.getState().evalByPly[1]).toBeDefined();
+    // Releasing the stream lets `onSuccess` finalize.
+    resolveStream(sampleEvals);
+    await waitFor(() =>
+      expect(useAnalyzerStore.getState().analysis).toEqual(sampleEvals),
+    );
+    expect(useAnalyzerStore.getState().analysisProgress).toBeNull();
+  });
+
   it("persists the returned analysis to the game's IndexedDB record and flips hasAnalysis", async () => {
     const game = makeGame("g1");
     await gamesRepo.put(game, {
@@ -303,13 +341,16 @@ describe("useAnalyzeGame", () => {
       contentHash: "hash-analyze-1",
     });
     useAnalyzerStore.setState({ game });
-    analyzeGame.mockResolvedValueOnce(sampleEvals);
+    analyzeGameStream.mockResolvedValueOnce(sampleEvals);
 
     const { result } = renderAnalyzeHook();
     result.current.analyze();
 
-    await waitFor(() => expect(analyzeGame).toHaveBeenCalledTimes(1));
-    expect(analyzeGame).toHaveBeenCalledWith({ game });
+    await waitFor(() => expect(analyzeGameStream).toHaveBeenCalledTimes(1));
+    expect(analyzeGameStream).toHaveBeenCalledWith(
+      { game },
+      expect.any(Function),
+    );
 
     await waitFor(async () => {
       const stored = await gamesRepo.get("g1");
@@ -327,7 +368,7 @@ describe("useAnalyzeGame", () => {
     // through `gamesRepo.put` — there is no IndexedDB record to write onto.
     const game = makeGame("transient-1");
     useAnalyzerStore.setState({ game });
-    analyzeGame.mockResolvedValueOnce(sampleEvals);
+    analyzeGameStream.mockResolvedValueOnce(sampleEvals);
     const toastErrorSpy = vi.spyOn(toast, "error");
     const toastSuccessSpy = vi.spyOn(toast, "success");
 
@@ -360,7 +401,7 @@ describe("useAnalyzeGame", () => {
       contentHash: "hash-analyze-fail",
     });
     useAnalyzerStore.setState({ game });
-    analyzeGame.mockResolvedValueOnce(sampleEvals);
+    analyzeGameStream.mockResolvedValueOnce(sampleEvals);
     const setAnalysisSpy = vi
       .spyOn(gamesRepo, "setAnalysis")
       .mockRejectedValueOnce(new Error("quota"));

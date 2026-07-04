@@ -7,6 +7,7 @@ import type {
   ImportGameResponse,
   AnalyzePositionRequest,
   AnalyzeGameRequest,
+  AnalyzeGameStreamEvent,
   KeyMomentsRequest,
   AgentMessageRequest,
   AgentEvent,
@@ -86,6 +87,63 @@ export function analyzeGame(body: AnalyzeGameRequest): Promise<MoveEval[]> {
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+/**
+ * Streaming variant of {@link analyzeGame}: POSTs the game and reads an SSE
+ * stream of {@link AnalyzeGameStreamEvent}s. `onProgress` fires after each ply
+ * (with the just-completed eval, its ply, and the total ply count) so the UI
+ * can show live Stockfish progress; the promise resolves with the full
+ * {@link MoveEval}[] on `done` and rejects on `error`. Uses `fetch` + a
+ * streaming body (not `EventSource`, which is GET-only and can't send a body).
+ */
+export async function analyzeGameStream(
+  body: AnalyzeGameRequest,
+  onProgress: (event: { ply: number; total: number; eval: MoveEval }) => void,
+): Promise<MoveEval[]> {
+  const res = await fetch(`${BASE}/analysis/game/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok || !res.body) {
+    const message = await extractError(res);
+    throw new ApiError(res.status, message);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let evals: MoveEval[] = [];
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // SSE frames are separated by a blank line. A single `data:` line per frame.
+    let sep: number;
+    while ((sep = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      const line = frame.startsWith("data:")
+        ? frame.slice(5).trim()
+        : frame.trim();
+      if (!line) continue;
+      let event: AnalyzeGameStreamEvent;
+      try {
+        event = JSON.parse(line) as AnalyzeGameStreamEvent;
+      } catch {
+        continue;
+      }
+      if (event.type === "progress") {
+        evals.push(event.eval);
+        onProgress({ ply: event.ply, total: event.total, eval: event.eval });
+      } else if (event.type === "done") {
+        evals = event.evals;
+      } else if (event.type === "error") {
+        throw new ApiError(500, event.message);
+      }
+    }
+  }
+  return evals;
 }
 
 /**

@@ -26,6 +26,7 @@ export class AppController {
         'GET  /api/games/:id',
         'POST /api/analysis/position',
         'POST /api/analysis/game',
+        'POST /api/analysis/game/stream',
         'GET  /api/agent/:sessionId/stream',
         'POST /api/agent/:sessionId/messages',
         'GET  /api/health',

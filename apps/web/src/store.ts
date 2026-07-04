@@ -369,6 +369,9 @@ export interface AnalyzerState {
   /** Whether best-move arrows are drawn. Persisted to localStorage. */
   arrowsEnabled: boolean;
   analysis: MoveEval[] | null;
+  /** Live Stockfish analysis progress (X of N plies) while `analyze` is running. */
+  analysisProgress: { done: number; total: number } | null;
+  setAnalysisProgress: (p: { done: number; total: number } | null) => void;
   chat: ChatMessage[];
   streaming: boolean;
   sessionId: string;
@@ -461,6 +464,7 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
   arrowEvalByFen: {},
   arrowsEnabled: readArrowsEnabled(),
   analysis: null,
+  analysisProgress: null,
   chat: [],
   streaming: false,
   sessionId: crypto.randomUUID(),
@@ -478,6 +482,7 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
       rootId: tree.rootId,
       currentNodeId: tree.rootId,
       analysis: game.analysis ?? null,
+      analysisProgress: null,
       evalByPly: {},
       arrowEvalByFen: {},
       agentFen: null,
@@ -548,6 +553,8 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
     }),
 
   setAnalysis: (evals) => set({ analysis: evals }),
+
+  setAnalysisProgress: (p) => set({ analysisProgress: p }),
 
   appendUserMessage: (text) =>
     set((s) => ({

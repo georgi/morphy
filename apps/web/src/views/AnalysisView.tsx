@@ -67,6 +67,7 @@ function ReviewingSubtitle() {
  */
 export function AnalysisView() {
   const { analyze, isPending, canAnalyze } = useAnalyzeGame();
+  const analysisProgress = useAnalyzerStore((s) => s.analysisProgress);
 
   // The chat panel stays mounted when collapsed (size 0) so its persistent SSE
   // stream to the analyst survives a collapse. `chatCollapsed` mirrors the panel
@@ -111,7 +112,11 @@ export function AnalysisView() {
             disabled={!canAnalyze}
           >
             {isPending ? <Loader2 className="animate-spin" /> : <BarChart3 />}
-            {isPending ? "Analyzing…" : "Analyze game"}
+            {isPending && analysisProgress
+              ? `Analyzing… ${analysisProgress.done} / ${analysisProgress.total}`
+              : isPending
+                ? "Analyzing…"
+                : "Analyze game"}
           </Button>
           <Separator orientation="vertical" className="!h-5" />
           <Button

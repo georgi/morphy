@@ -575,10 +575,18 @@ function evalForPly(moveEval: MoveEval): EngineEval {
 export function useAnalyzeGame() {
   const game = useAnalyzerStore((s) => s.game);
   const setAnalysis = useAnalyzerStore((s) => s.setAnalysis);
+  const setAnalysisProgress = useAnalyzerStore((s) => s.setAnalysisProgress);
   const setEvalForPly = useAnalyzerStore((s) => s.setEvalForPly);
 
   const mutation = useMutation({
-    mutationFn: (game: Game) => api.analyzeGame({ game }),
+    mutationFn: (game: Game) =>
+      api.analyzeGameStream({ game }, ({ ply, total, eval: moveEval }) => {
+        // Light up the eval bar for this ply as soon as Stockfish finishes it,
+        // and reflect progress in the store so the analyze button can show
+        // "Analyzing… X / N".
+        setEvalForPly(ply, evalForPly(moveEval));
+        setAnalysisProgress({ done: ply, total });
+      }),
     onSuccess: async (evals: MoveEval[], analyzedGame: Game) => {
       // Persist onto the game's IndexedDB record so reopening it from the
       // library rehydrates the analysis (see `gamesRepo.get` -> `setGame`).
@@ -593,6 +601,7 @@ export function useAnalyzeGame() {
       // showing analysis that was never actually saved.
       await gamesRepo.setAnalysis(analyzedGame.id, evals);
       setAnalysis(evals);
+      setAnalysisProgress(null);
       for (const moveEval of evals) {
         setEvalForPly(moveEval.ply, evalForPly(moveEval));
       }
@@ -610,6 +619,7 @@ export function useAnalyzeGame() {
       });
     },
     onError: (err) => {
+      setAnalysisProgress(null);
       toast.error("Analysis failed", { description: errorMessage(err) });
     },
   });

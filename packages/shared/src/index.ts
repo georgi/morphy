@@ -220,6 +220,16 @@ export interface AnalyzeGameRequest {
   game: Game;
   depth?: number;
 }
+/** Progress/result events streamed over `POST /api/analysis/game/stream` (SSE). */
+export type AnalyzeGameStreamEvent =
+  | {
+      type: "progress";
+      ply: number;
+      total: number;
+      eval: MoveEval;
+    }
+  | { type: "done"; evals: MoveEval[] }
+  | { type: "error"; message: string };
 export interface KeyMomentsRequest {
   game: Game;
 }
@@ -279,6 +289,7 @@ export type AgentEvent =
       verdict: "correct" | "close" | "off" | "revealed";
       evalText: string;
     }
+  | { type: "notice"; level: "info" | "warn"; message: string }
   | { type: "done" }
   | { type: "error"; message: string };
 
