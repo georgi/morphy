@@ -12,13 +12,19 @@ import * as api from "@/lib/api";
 
 // Capture every stream URL the ChatPanel opens so we can assert what it forwards.
 const opened: string[] = [];
+const sources: StubEventSource[] = [];
 class StubEventSource {
   onmessage: ((e: MessageEvent) => void) | null = null;
   onerror: (() => void) | null = null;
   constructor(public url: string) {
     opened.push(url);
+    sources.push(this);
   }
   close() {}
+  /** Deliver a server AgentEvent to the panel, as the SSE onmessage would. */
+  emit(event: unknown) {
+    this.onmessage?.({ data: JSON.stringify(event) } as MessageEvent);
+  }
 }
 
 // react-scroll-area / the picker's dropdown need ResizeObserver, absent in jsdom.
@@ -30,6 +36,7 @@ class StubResizeObserver {
 
 beforeEach(() => {
   opened.length = 0;
+  sources.length = 0;
   vi.stubGlobal("EventSource", StubEventSource);
   vi.stubGlobal("ResizeObserver", StubResizeObserver);
   // The ModelPicker fetches /agent/models on mount; keep it off the network.
@@ -86,6 +93,42 @@ describe("ChatPanel SSE wiring", () => {
     });
     expect(opened.length).toBeGreaterThan(before);
     expect(opened.at(-1)).toContain("model=claude-opus-4-8");
+  });
+});
+
+describe("ChatPanel error and notice handling", () => {
+  it("renders a turn error inline in the assistant bubble", () => {
+    renderPanel();
+    act(() => {
+      useAnalyzerStore.getState().startAssistantMessage();
+    });
+    act(() => {
+      sources.at(-1)!.emit({
+        type: "error",
+        message: "Every available model is rate-limited upstream right now.",
+      });
+    });
+
+    // getByText throws if the inline error is not rendered.
+    expect(screen.getByText(/rate-limited upstream/i)).toBeTruthy();
+    expect(useAnalyzerStore.getState().streaming).toBe(false);
+  });
+
+  it("updates the shown model when the server falls back via a notice", () => {
+    act(() => {
+      useAnalyzerStore.setState({ model: "m1" });
+    });
+    renderPanel();
+    act(() => {
+      sources.at(-1)!.emit({
+        type: "notice",
+        level: "warn",
+        message: "The previous model was rate-limited; retrying with m2.",
+      });
+      sources.at(-1)!.emit({ type: "session", id: "sid", model: "m2" });
+    });
+
+    expect(useAnalyzerStore.getState().model).toBe("m2");
   });
 });
 

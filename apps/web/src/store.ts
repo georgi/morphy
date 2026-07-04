@@ -38,6 +38,8 @@ export interface ChatMessage {
   role: "user" | "assistant";
   text: string;
   tools: ChatToolEvent[];
+  /** Set when the turn failed: the error is rendered inline in the bubble. */
+  error?: string;
 }
 
 /** The `coach_question`/`coach_reveal` event payloads, mirrored from the contract. */
@@ -403,7 +405,9 @@ export interface AnalyzerState {
   appendAssistantDelta: (delta: string) => void;
   addToolEvent: (tool: string, ok?: boolean) => void;
   endAssistantMessage: () => void;
+  failAssistantMessage: (message: string) => void;
   setModel: (id: string) => void;
+  noteServerModel: (id: string) => void;
   newChat: () => void;
   continueSession: (sdkId: string) => Promise<void>;
   setSessionId: (sdkId: string) => void;
@@ -587,6 +591,16 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
 
   endAssistantMessage: () => set({ streaming: false }),
 
+  failAssistantMessage: (message) =>
+    set((s) => {
+      const chat = s.chat.slice();
+      const last = chat[chat.length - 1];
+      if (last && last.role === "assistant") {
+        chat[chat.length - 1] = { ...last, error: message };
+      }
+      return { chat, streaming: false };
+    }),
+
   setModel: (id) =>
     set({
       model: id,
@@ -596,6 +610,11 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
       currentSessionId: undefined,
       sessionId: crypto.randomUUID(),
     }),
+
+  // Reflect the model the server actually served (after a rate-limit fallback)
+  // without the session-rotating side effects of `setModel`: keep the chat and the
+  // open stream, just update the shown model so the picker matches reality.
+  noteServerModel: (id) => set({ model: id }),
 
   newChat: () =>
     set({

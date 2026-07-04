@@ -20,6 +20,7 @@ import {
   type AgentHarness,
   type AgentRunner,
 } from "./harness/agent-harness";
+import type { AgentTool } from "./harness/agent-tool";
 import { MODEL_FILTER, type ModelFilter } from "./model-filter";
 
 /** Options threaded from the SSE query string into session creation. */
@@ -43,10 +44,42 @@ interface SessionState {
    * latest game.
    */
   context: { game?: Game; ply?: number };
+  /**
+   * The session's tools, bound once to `subject`/`context`. Held so a rate-limit
+   * fallback can spawn a replacement runner (on a different model) against the same
+   * tools without rebuilding them.
+   */
+  tools: AgentTool[];
+  /** The model the live runner is running (`undefined` = harness default). */
+  model?: string;
 }
+
+/**
+ * How many models a single turn will try before giving up on rate limits. A small
+ * bound: the fallback is a safety net for a transient 429 on an otherwise-healthy
+ * model, not a cure for a broadly throttled free tier (each attempt is a serial
+ * round-trip, so a large cap just adds latency before the friendly error).
+ */
+const MAX_MODEL_ATTEMPTS = 4;
 
 /** How many recent moves to include in the prompt context when a game is active. */
 const RECENT_MOVES_IN_CONTEXT = 6;
+
+/**
+ * The model used when the client makes no explicit choice: OpenRouter's "Free Models
+ * Router", which routes each request to an available free model. Always available
+ * (no single free model to be rate-limited), so a fresh chat is never dead on arrival.
+ */
+const DEFAULT_MODEL = "openrouter/free";
+
+/**
+ * Whether a failed turn's error is an upstream rate limit (HTTP 429 or a provider
+ * "rate-limited" message) — the case a model fallback can recover from.
+ */
+function isRateLimited(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /\b429\b/.test(message) || /rate.?limit/i.test(message);
+}
 
 const SYSTEM_PROMPT = `You are a chess coach embedded in an analysis app. You are concise and never chatty.
 
@@ -150,17 +183,87 @@ export class AgentService {
     state.context.ply = body.ply;
 
     const prompt = this.buildPrompt(body);
-    try {
-      // The harness resolves on turn completion and throws on a failed turn (the
-      // backend's error surfacing lives behind the interface now).
-      await state.runner.prompt(prompt);
-      state.subject.next({ type: "done" });
-    } catch (err) {
-      state.subject.next({
-        type: "error",
-        message: err instanceof Error ? err.message : String(err),
-      });
+    await this.runTurn(state, prompt);
+  }
+
+  /**
+   * Run one turn, transparently falling back to another permitted model when the
+   * chosen one is rate-limited upstream (common on OpenRouter's free tier). Each
+   * fallback spawns a replacement runner on the next candidate model — which loses
+   * the previous runner's in-memory history, an acceptable trade since the dominant
+   * case is a first-turn 429 with nothing to lose. Non-rate-limit errors surface
+   * immediately; exhausting the candidates surfaces a friendly, actionable error.
+   */
+  private async runTurn(state: SessionState, prompt: string): Promise<void> {
+    const tried = new Set<string>();
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < MAX_MODEL_ATTEMPTS; attempt++) {
+      try {
+        // The harness resolves on turn completion and throws on a failed turn (the
+        // backend's error surfacing lives behind the interface now).
+        await state.runner.prompt(prompt);
+        state.subject.next({ type: "done" });
+        return;
+      } catch (err) {
+        lastError = err;
+        if (state.model) tried.add(state.model);
+        if (!isRateLimited(err)) break;
+
+        const next = await this.nextCandidateModel(tried);
+        if (!next) break;
+
+        await state.runner.dispose?.();
+        state.model = next;
+        state.runner = await this.spawnRunner(state, next);
+        state.subject.next({
+          type: "notice",
+          level: "warn",
+          message: `The previous model was rate-limited; retrying with ${next}.`,
+        });
+      }
     }
+
+    state.subject.next({
+      type: "error",
+      message: this.friendlyTurnError(lastError),
+    });
+  }
+
+  /** The first permitted model not yet tried this turn, or `undefined` if none remain. */
+  private async nextCandidateModel(
+    tried: Set<string>,
+  ): Promise<string | undefined> {
+    const models = await this.listModels();
+    return models.find((m) => !tried.has(m.id))?.id;
+  }
+
+  /** Spawn a replacement runner on `model`, reusing the session's subject and tools. */
+  private spawnRunner(
+    state: SessionState,
+    model: string,
+  ): Promise<AgentRunner> {
+    return this.harness.createSession({
+      systemPrompt: SYSTEM_PROMPT,
+      tools: state.tools,
+      emit: (event) => state.subject.next(event),
+      model,
+    });
+  }
+
+  /**
+   * Turn a failed turn's error into user-facing text: a rate-limit exhaustion gets
+   * an actionable message (all free models throttled — add a key or pick another);
+   * anything else passes through as-is.
+   */
+  private friendlyTurnError(err: unknown): string {
+    if (isRateLimited(err)) {
+      return (
+        "Every available model is rate-limited upstream right now. Try again in a " +
+        "moment, pick a different model, or add your own provider key to raise your limits."
+      );
+    }
+    return err instanceof Error ? err.message : String(err);
   }
 
   // ── session lifecycle ────────────────────────────────────────────────────
@@ -231,30 +334,33 @@ export class AgentService {
 
     const tools = await this.tools.buildToolsForSession(toolCtx);
 
+    const model = await this.resolveModel(opts?.model);
     const cfg = {
       systemPrompt: SYSTEM_PROMPT,
       tools,
       emit: (event: AgentEvent) => subject.next(event),
-      model: await this.resolveModel(opts?.model),
+      model,
     };
     const runner = opts?.resume
       ? await this.harness.resumeSession(opts.resume, cfg)
       : await this.harness.createSession(cfg);
 
-    return { runner, subject, context };
+    return { runner, subject, context, tools, model };
   }
 
   /**
-   * Resolve the model a session is created with under the access policy. When the
-   * policy is unrestricted the request passes through unchanged (`undefined` → the
-   * harness default). When restricted, a permitted requested id is honored; anything
-   * else — a disallowed id, or no explicit choice (whose harness default could be a
-   * paid model) — falls back to the first permitted model. Throws when the policy
-   * permits nothing, surfaced onto the stream as an `error` event by getStream.
+   * Resolve the model a session is created with under the access policy. With no
+   * explicit choice the default is {@link DEFAULT_MODEL} — OpenRouter's always-available
+   * free-models router — rather than the harness default (whose first free model is
+   * often rate-limited). When unrestricted the resolved id passes through. When
+   * restricted, a permitted id is honored; a disallowed explicit id falls back to the
+   * first permitted model. Throws when the policy permits nothing, surfaced onto the
+   * stream as an `error` event by getStream.
    */
   private async resolveModel(requested?: string): Promise<string | undefined> {
-    if (!this.modelFilter.restricted) return requested;
-    if (requested && this.modelFilter.allows(requested)) return requested;
+    const wanted = requested ?? DEFAULT_MODEL;
+    if (!this.modelFilter.restricted) return wanted;
+    if (this.modelFilter.allows(wanted)) return wanted;
     const [fallback] = await this.listModels();
     if (!fallback) {
       throw new Error(

@@ -744,3 +744,31 @@ describe("library query (setQuery)", () => {
     expect(query.offset).toBe(0);
   });
 });
+
+describe("chat error surfacing and model notice", () => {
+  it("failAssistantMessage records the error on the last assistant bubble and stops streaming", () => {
+    const store = useAnalyzerStore.getState();
+    store.startAssistantMessage();
+    store.failAssistantMessage("This model is rate-limited.");
+
+    const state = useAnalyzerStore.getState();
+    const last = state.chat[state.chat.length - 1];
+    expect(last.role).toBe("assistant");
+    expect(last.error).toBe("This model is rate-limited.");
+    expect(state.streaming).toBe(false);
+  });
+
+  it("noteServerModel updates the shown model without clearing the chat or rotating the session", () => {
+    useAnalyzerStore.setState({ model: "m1" });
+    const store = useAnalyzerStore.getState();
+    store.appendUserMessage("hi");
+    const sessionId = useAnalyzerStore.getState().sessionId;
+
+    store.noteServerModel("m2");
+
+    const state = useAnalyzerStore.getState();
+    expect(state.model).toBe("m2");
+    expect(state.chat.length).toBe(1);
+    expect(state.sessionId).toBe(sessionId);
+  });
+});

@@ -60,12 +60,21 @@ export function ChatPanel() {
         case "coach_reveal":
           store.setCoachReveal(e);
           break;
+        case "session":
+          // The server may serve a different model than requested (rate-limit
+          // fallback); keep the picker showing what actually answered.
+          if (e.model) store.noteServerModel(e.model);
+          break;
+        case "notice":
+          if (e.level === "warn") toast.warning(e.message);
+          else toast.info(e.message);
+          break;
         case "done":
           store.endAssistantMessage();
           break;
         case "error":
           toast.error(e.message || "The analyst hit an error.");
-          store.endAssistantMessage();
+          store.failAssistantMessage(e.message || "The analyst hit an error.");
           break;
       }
     };
@@ -246,12 +255,19 @@ function MessageBubble({
         </p>
       ) : (
         showThinking &&
-        msg.tools.length === 0 && (
+        msg.tools.length === 0 &&
+        !msg.error && (
           <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
             <Loader2 className="size-3.5 animate-spin" />
             Thinking…
           </span>
         )
+      )}
+      {msg.error && (
+        <div className="flex items-start gap-1.5 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
+          <CircleAlert className="mt-px size-3.5 shrink-0" />
+          <span>{msg.error}</span>
+        </div>
       )}
     </div>
   );

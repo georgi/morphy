@@ -1,6 +1,10 @@
-import type { ModelInfo } from "@chess/shared";
+import type { AgentEvent, ModelInfo } from "@chess/shared";
 import { AgentService } from "./agent.service";
-import type { AgentHarness } from "./harness/agent-harness";
+import type {
+  AgentHarness,
+  AgentRunner,
+  AgentSessionConfig,
+} from "./harness/agent-harness";
 import type { ChessToolsService } from "./chess-tools.service";
 import type { ChessService } from "../chess/chess.service";
 import { ModelFilter, createModelFilterFromEnv } from "./model-filter";
@@ -61,10 +65,10 @@ describe("AgentService.listModels", () => {
 });
 
 describe("AgentService session model resolution", () => {
-  it("passes the request through untouched when unrestricted", async () => {
+  it("defaults to openrouter/free when none is chosen, else honors the request", async () => {
     const svc = makeService(MODELS, createModelFilterFromEnv({}));
-    // undefined stays undefined → the harness picks its own default.
-    expect(await resolveModel(svc, undefined)).toBeUndefined();
+    // No explicit choice → the always-available free router, not the harness default.
+    expect(await resolveModel(svc, undefined)).toBe("openrouter/free");
     expect(await resolveModel(svc, "claude-opus-4-8")).toBe("claude-opus-4-8");
   });
 
@@ -80,19 +84,116 @@ describe("AgentService session model resolution", () => {
     );
   });
 
-  it("substitutes a permitted model when none is chosen (never the paid harness default)", async () => {
-    expect(await resolveModel(freeOnly(), undefined)).toBe(
-      "deepseek/deepseek-r1:free",
-    );
+  it("defaults to openrouter/free (permitted, always available) when none is chosen", async () => {
+    expect(await resolveModel(freeOnly(), undefined)).toBe("openrouter/free");
   });
 
-  it("throws when the policy permits nothing", async () => {
+  it("throws when the policy permits nothing and an explicit disallowed model is asked for", async () => {
     const svc = makeService(
       [{ id: "claude-opus-4-8", provider: "anthropic" }],
       createModelFilterFromEnv({ AGENT_MODEL_FILTER: "openrouter-free" }),
     );
-    await expect(resolveModel(svc, undefined)).rejects.toThrow(
+    await expect(resolveModel(svc, "claude-opus-4-8")).rejects.toThrow(
       /no permitted models/i,
     );
+  });
+});
+
+// ── rate-limit fallback ──────────────────────────────────────────────────────
+
+const FALLBACK_MODELS: ModelInfo[] = [
+  { id: "m1", provider: "openrouter" },
+  { id: "m2", provider: "openrouter" },
+  { id: "m3", provider: "openrouter" },
+];
+
+function rateLimitError(model: string): Error {
+  return new Error(
+    `429 Provider returned error\n${model} is temporarily rate-limited upstream.`,
+  );
+}
+
+/**
+ * Build an AgentService over a fake harness whose runners rate-limit any model in
+ * `rateLimited` and stream a token for the rest. Records the models actually
+ * prompted so a test can assert which ones were tried and in what order.
+ */
+function makeFallbackService(rateLimited: Set<string>): {
+  svc: AgentService;
+  tried: string[];
+} {
+  const tried: string[] = [];
+  const harness = {
+    listModels: () => Promise.resolve(FALLBACK_MODELS),
+    createSession: (cfg: AgentSessionConfig): Promise<AgentRunner> => {
+      const model = cfg.model ?? "m1";
+      const runner: AgentRunner = {
+        id: `runner-${model}`,
+        prompt: async () => {
+          tried.push(model);
+          cfg.emit({ type: "session", id: "sid", model });
+          if (rateLimited.has(model)) throw rateLimitError(model);
+          cfg.emit({ type: "text_delta", delta: "ok" });
+        },
+        dispose: () => {},
+      };
+      return Promise.resolve(runner);
+    },
+  } as unknown as AgentHarness;
+  const tools = {
+    buildToolsForSession: () => Promise.resolve([]),
+  } as unknown as ChessToolsService;
+  const svc = new AgentService(
+    tools,
+    {} as ChessService,
+    harness,
+    createModelFilterFromEnv({}),
+  );
+  return { svc, tried };
+}
+
+/** Collect the AgentEvents a turn emits: subscribe, run it, end the subject. */
+async function runTurn(
+  svc: AgentService,
+  sessionId: string,
+  model: string | undefined,
+): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+  const stream = svc.getStream(sessionId, { model });
+  const sub = stream.subscribe((e) => events.push(JSON.parse(e.data as string)));
+  await svc.sendMessage(sessionId, { text: "hi" });
+  sub.unsubscribe();
+  return events;
+}
+
+describe("AgentService rate-limit fallback", () => {
+  it("falls back to the next permitted model when the chosen one is rate-limited", async () => {
+    const { svc, tried } = makeFallbackService(new Set(["m1"]));
+    const events = await runTurn(svc, "s1", "m1");
+
+    expect(tried).toEqual(["m1", "m2"]);
+    expect(events.some((e) => e.type === "done")).toBe(true);
+    expect(events.some((e) => e.type === "error")).toBe(false);
+  });
+
+  it("emits a notice announcing the model switch", async () => {
+    const { svc } = makeFallbackService(new Set(["m1"]));
+    const events = await runTurn(svc, "s2", "m1");
+
+    const notice = events.find((e) => e.type === "notice");
+    expect(notice).toBeDefined();
+    expect((notice as { message: string }).message).toContain("m2");
+  });
+
+  it("surfaces a friendly error, not the raw 429, when every model is rate-limited", async () => {
+    const { svc } = makeFallbackService(new Set(["m1", "m2", "m3"]));
+    const events = await runTurn(svc, "s3", "m1");
+
+    const error = events.find((e) => e.type === "error") as
+      | { message: string }
+      | undefined;
+    expect(error).toBeDefined();
+    expect(error!.message).toMatch(/rate-limited/i);
+    expect(error!.message).not.toContain("429 Provider returned error");
   });
 });
