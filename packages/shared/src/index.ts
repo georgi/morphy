@@ -293,6 +293,63 @@ export type AgentEvent =
   | { type: "done" }
   | { type: "error"; message: string };
 
+// ── Play mode ────────────────────────────────────────────────────────────────
+
+/** Public projection of a play character (prompts/chess profile stay server-side). */
+export interface Character {
+  id: string;
+  name: string;
+  avatar: string; // emoji, v1
+  tagline: string;
+  bio: string;
+  strength: 1 | 2 | 3 | 4 | 5;
+  styleTag: string;
+}
+
+export type PlaySide = "white" | "black";
+export type PlayStatus = "active" | "over";
+export type PlayResult = "1-0" | "0-1" | "1/2-1/2";
+export type PlayEndReason =
+  | "checkmate"
+  | "stalemate"
+  | "draw" // 50-move / repetition / insufficient material
+  | "resignation"
+  | "agreement";
+
+/** A live (or finished) play-mode game. `side` is the HUMAN's side. */
+export interface PlayGame {
+  id: string;
+  characterId: string;
+  side: PlaySide;
+  startFen: string;
+  fen: string;
+  moves: Move[];
+  status: PlayStatus;
+  result?: PlayResult;
+  endReason?: PlayEndReason;
+}
+
+export interface CreatePlayGameRequest {
+  characterId: string;
+  side: PlaySide | "random";
+}
+export interface PlayMoveRequest {
+  move: string; // SAN or UCI
+}
+export interface PlayChatRequest {
+  text: string;
+}
+
+/** Events streamed over `GET /api/play/:id/events` (SSE). */
+export type PlayEvent =
+  | { type: "ai_move"; move: Move; fen: string }
+  | { type: "banter"; text: string } // whole-message quip from the move pick
+  | { type: "chat_delta"; delta: string } // streamed talker output (chat replies, triggered banter, parting shot)
+  | { type: "chat_done" }
+  | { type: "draw_response"; accepted: boolean }
+  | { type: "game_over"; result: PlayResult; reason: PlayEndReason }
+  | { type: "error"; message: string };
+
 export const CLASSIFY_THRESHOLDS = {
   inaccuracy: 50,
   mistake: 100,
