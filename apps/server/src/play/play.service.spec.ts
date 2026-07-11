@@ -162,3 +162,82 @@ describe("PlayService", () => {
     expect(service.getGame(game.id).status).toBe("active");
   });
 });
+
+describe("PlayService mover", () => {
+  function moverHarness(reply: string) {
+    let emit: ((e: { type: string; delta?: string }) => void) | null = null;
+    const prompts: string[] = [];
+    return {
+      prompts,
+      harness: {
+        listModels: jest.fn(async () => []),
+        listSessions: jest.fn(async () => []),
+        getSessionMessages: jest.fn(async () => []),
+        createSession: jest.fn(async (cfg: { emit: typeof emit }) => {
+          emit = cfg.emit;
+          return {
+            id: "mover",
+            prompt: jest.fn(async (text: string) => {
+              prompts.push(text);
+              emit!({ type: "text_delta", delta: reply });
+            }),
+            dispose: jest.fn(),
+          };
+        }),
+        resumeSession: jest.fn(),
+      },
+    };
+  }
+
+  function makeMoverService(reply: string) {
+    const chess = new ChessService();
+    // Two candidate lines so the LLM has a real choice: best d2d4, second g1f3.
+    const engine = {
+      analyze: jest.fn(async (fen: string) => ({
+        fen,
+        bestMove: "d2d4",
+        depth: 8,
+        lines: [
+          { pv: ["d2d4"], scoreCp: 30, mate: null, rank: 1 },
+          { pv: ["g1f3"], scoreCp: 20, mate: null, rank: 2 },
+        ],
+      })),
+    };
+    const { harness, prompts } = moverHarness(reply);
+    const service = new PlayService(
+      chess, engine as never, new CharacterRegistry(), harness as never,
+    );
+    return { service, prompts };
+  }
+
+  it("plays the LLM's candidate pick and emits its comment as banter", async () => {
+    const { service, prompts } = makeMoverService(
+      '{"move":"g1f3","comment":"Knights before bishops, professor."}',
+    );
+    const game = await service.createGame({ characterId: "hustler", side: "black" });
+    const [aiMove, banter] = await nextEvents(service, game.id, 2);
+    expect(aiMove).toMatchObject({ type: "ai_move" });
+    expect((aiMove as { move: { san: string } }).move.san).toBe("Nf3");
+    expect(banter).toEqual({
+      type: "banter",
+      text: "Knights before bishops, professor.",
+    });
+    // The turn prompt offered both candidates.
+    expect(prompts[0]).toContain("d2d4");
+    expect(prompts[0]).toContain("g1f3");
+  });
+
+  it("falls back to engine best on garbage output", async () => {
+    const { service } = makeMoverService("chess is life, no JSON for you");
+    const game = await service.createGame({ characterId: "hustler", side: "black" });
+    const [aiMove] = await nextEvents(service, game.id, 1);
+    expect((aiMove as { move: { san: string } }).move.san).toBe("d4");
+  });
+
+  it("falls back to engine best when the pick is not a candidate", async () => {
+    const { service } = makeMoverService('{"move":"a2a4"}');
+    const game = await service.createGame({ characterId: "hustler", side: "black" });
+    const [aiMove] = await nextEvents(service, game.id, 1);
+    expect((aiMove as { move: { san: string } }).move.san).toBe("d4");
+  });
+});

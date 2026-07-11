@@ -26,11 +26,14 @@ import {
 } from "../agent/harness/agent-harness";
 import { CharacterRegistry } from "./character-registry.service";
 import type { CharacterConfig } from "./characters.data";
+import { buildCandidates, type Candidate } from "./move-candidates";
 
 const START_FEN =
   "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 /** Character accepts a draw when its POV advantage is at most this. */
 const DRAW_ACCEPT_MAX_CP = 50;
+/** Model used for the mover and talker sessions. */
+const PLAY_MODEL = "openrouter/free";
 
 interface PlaySession {
   game: PlayGame;
@@ -210,12 +213,36 @@ export class PlayService {
       });
       session.lastEval = engineEval;
 
-      const bestUci = engineEval.bestMove ?? engineEval.lines[0]?.pv[0];
-      const san = bestUci ? this.chess.uciToSan(game.fen, bestUci) : null;
-      if (!san) throw new Error(`Engine returned no playable move for ${game.fen}`);
-      this.applyMove(session, san);
+      const candidates = buildCandidates({
+        engineEval,
+        sideToMove: game.fen.split(" ")[1] as "w" | "b",
+        evalWindowCp: character.chess.evalWindowCp,
+        blunderRate: character.chess.blunderRate,
+        legalSans: this.chess.legalMoves(game.fen),
+        uciToSan: (uci) => this.chess.uciToSan(game.fen, uci),
+        sanToUci: (san) => {
+          try {
+            return this.chess.applySan(game.fen, san).move.uci;
+          } catch {
+            return null;
+          }
+        },
+        rng: session.rng,
+      });
+
+      const pick = await this.pickMove(session, candidates);
+      const chosen =
+        candidates.find((c) => c.uci === pick?.move) ??
+        candidates.find((c) => !c.offbeat) ??
+        candidates[0];
+      if (!chosen) throw new Error(`No playable move for ${game.fen}`);
+
+      this.applyMove(session, chosen.san);
       const move = game.moves[game.moves.length - 1];
       session.subject.next({ type: "ai_move", move, fen: game.fen });
+      if (pick?.move === chosen.uci && pick.comment?.trim()) {
+        session.subject.next({ type: "banter", text: pick.comment.trim() });
+      }
 
       const status = this.chess.gameStatus(game.fen);
       if (status.over) this.endGame(session, status.result, status.reason);
@@ -228,6 +255,82 @@ export class PlayService {
     } finally {
       session.thinking = false;
     }
+  }
+
+  /** One structured mover turn. Returns null on any failure (caller falls back). */
+  private async pickMove(
+    session: PlaySession,
+    candidates: Candidate[],
+  ): Promise<{ move: string; comment?: string } | null> {
+    try {
+      if (!session.mover) {
+        session.mover = await this.harness.createSession({
+          systemPrompt: this.moverSystemPrompt(session.character),
+          tools: [],
+          model: PLAY_MODEL,
+          emit: (e) => {
+            if (e.type === "text_delta") session.moverOut.text += e.delta;
+          },
+        });
+      }
+      session.moverOut.text = "";
+      await session.mover.prompt(this.moverTurnPrompt(session, candidates));
+      const match = session.moverOut.text.match(/\{[\s\S]*\}/);
+      if (!match) return null;
+      const parsed = JSON.parse(match[0]) as { move?: unknown; comment?: unknown };
+      if (typeof parsed.move !== "string") return null;
+      if (!candidates.some((c) => c.uci === parsed.move)) return null;
+      return {
+        move: parsed.move,
+        comment: typeof parsed.comment === "string" ? parsed.comment : undefined,
+      };
+    } catch (err) {
+      this.logger.debug(`mover failed, using engine best: ${String(err)}`);
+      return null;
+    }
+  }
+
+  private moverSystemPrompt(character: CharacterConfig): string {
+    return (
+      `${character.personaPrompt}\n\nStyle: ${character.chess.styleHints}\n\n` +
+      `You are PLAYING a game. Each prompt gives the position and candidate moves. ` +
+      `Reply with ONLY a JSON object {"move":"<uci from the candidate list>",` +
+      `"comment":"<optional one-line in-character remark>"} — no other text, no ` +
+      `code fences. Omit "comment" for routine moves.`
+    );
+  }
+
+  private moverTurnPrompt(session: PlaySession, candidates: Candidate[]): string {
+    const { game } = session;
+    const aiColor = game.side === "white" ? "Black" : "White";
+    const lines = candidates.map((c) =>
+      c.offbeat
+        ? `- ${c.uci} (${c.san}), eval unknown — offbeat, your call`
+        : `- ${c.uci} (${c.san}), eval ${this.formatEval(c)}`,
+    );
+    return [
+      `Position (FEN): ${game.fen}`,
+      `You are playing ${aiColor}.`,
+      `Recent moves: ${this.recentSans(game) || "(game start)"}`,
+      `Candidate moves:`,
+      ...lines,
+      `Pick ONE move from the candidates that best fits your style.`,
+    ].join("\n");
+  }
+
+  private formatEval(c: Candidate): string {
+    if (c.mate !== null) return `mate in ${Math.abs(c.mate)}`;
+    const cp = (c.scoreCp ?? 0) / 100;
+    return `${cp >= 0 ? "+" : ""}${cp.toFixed(2)}`;
+  }
+
+  private recentSans(game: PlayGame): string {
+    return game.moves
+      .slice(-6)
+      .map((m) =>
+        m.color === "w" ? `${m.moveNumber}.${m.san}` : `${m.moveNumber}...${m.san}`,
+      )
+      .join(" ");
   }
 
   private endGame(
