@@ -1,0 +1,164 @@
+import { BadRequestException, NotFoundException } from "@nestjs/common";
+import { firstValueFrom } from "rxjs";
+import { filter, map, take, toArray } from "rxjs/operators";
+import type { EngineEval, PlayEvent } from "@chess/shared";
+import { ChessService } from "../chess/chess.service";
+import { CharacterRegistry } from "./character-registry.service";
+import { PlayService } from "./play.service";
+
+const START_FEN =
+  "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+const stubEval = (fen: string, bestUci: string): EngineEval => ({
+  fen,
+  bestMove: bestUci,
+  depth: 8,
+  lines: [{ pv: [bestUci], scoreCp: 20, mate: null, rank: 1 }],
+});
+
+function makeService(overrides?: {
+  analyze?: (fen: string) => Promise<EngineEval>;
+}) {
+  const chess = new ChessService();
+  const engine = {
+    analyze: jest.fn(async (fen: string) => {
+      if (overrides?.analyze) return overrides.analyze(fen);
+      // Reply to any position with its first legal move.
+      const san = chess.legalMoves(fen)[0];
+      const uci = chess.applySan(fen, san).move.uci;
+      return stubEval(fen, uci);
+    }),
+  };
+  const harness = {
+    listModels: jest.fn(async () => []),
+    listSessions: jest.fn(async () => []),
+    getSessionMessages: jest.fn(async () => []),
+    createSession: jest.fn(async () => ({
+      id: "stub",
+      prompt: jest.fn(async () => undefined),
+      dispose: jest.fn(),
+    })),
+    resumeSession: jest.fn(),
+  };
+  const service = new PlayService(
+    chess,
+    engine as never,
+    new CharacterRegistry(),
+    harness as never,
+  );
+  return { service, engine, harness, chess };
+}
+
+/** Collect the next `n` PlayEvents from a game's stream. */
+function nextEvents(service: PlayService, id: string, n: number) {
+  return firstValueFrom(
+    service.getStream(id).pipe(
+      map((m) => JSON.parse(m.data as string) as PlayEvent),
+      take(n),
+      toArray(),
+    ),
+  );
+}
+
+describe("PlayService", () => {
+  it("creates a game with the chosen side and character", async () => {
+    const { service } = makeService();
+    const game = await service.createGame({ characterId: "hustler", side: "white" });
+    expect(game.characterId).toBe("hustler");
+    expect(game.side).toBe("white");
+    expect(game.fen).toBe(START_FEN);
+    expect(game.status).toBe("active");
+    expect(service.getGame(game.id)).toEqual(game);
+  });
+
+  it("rejects unknown character and unknown game ids", async () => {
+    const { service } = makeService();
+    await expect(
+      service.createGame({ characterId: "nope", side: "white" }),
+    ).rejects.toThrow(NotFoundException);
+    expect(() => service.getGame("missing")).toThrow(NotFoundException);
+  });
+
+  it("applies a legal user move and streams the AI reply", async () => {
+    const { service } = makeService();
+    const game = await service.createGame({ characterId: "hustler", side: "white" });
+    const eventsP = nextEvents(service, game.id, 1);
+
+    const updated = await service.userMove(game.id, "e4");
+    expect(updated.moves).toHaveLength(1);
+    expect(updated.moves[0].san).toBe("e4");
+
+    const [aiMove] = await eventsP;
+    expect(aiMove.type).toBe("ai_move");
+    const after = service.getGame(game.id);
+    expect(after.moves).toHaveLength(2);
+    expect(after.moves[1].color).toBe("b");
+  });
+
+  it("accepts UCI input", async () => {
+    const { service } = makeService();
+    const game = await service.createGame({ characterId: "hustler", side: "white" });
+    const updated = await service.userMove(game.id, "e2e4");
+    expect(updated.moves[0].san).toBe("e4");
+  });
+
+  it("rejects illegal moves and out-of-turn moves", async () => {
+    const { service } = makeService();
+    const game = await service.createGame({ characterId: "hustler", side: "black" });
+    // AI (white) moves first; user is black but it may still be white's turn.
+    await expect(service.userMove(game.id, "Ke2")).rejects.toThrow(
+      BadRequestException,
+    );
+  });
+
+  it("makes the first move when the user plays black", async () => {
+    const { service } = makeService();
+    const game = await service.createGame({ characterId: "hustler", side: "black" });
+    const [aiMove] = await nextEvents(service, game.id, 1);
+    expect(aiMove.type).toBe("ai_move");
+    expect(service.getGame(game.id).moves[0].color).toBe("w");
+  });
+
+  it("ends the game on checkmate delivered by the user", async () => {
+    // Force the AI into fool's mate: it plays f3 then g4.
+    const replies = ["f2f3", "g2g4"];
+    const { service } = makeService({
+      analyze: async (fen) => stubEval(fen, replies.shift()!),
+    });
+    const game = await service.createGame({ characterId: "hustler", side: "black" });
+    await nextEvents(service, game.id, 1); // f3
+    const gEventsP = nextEvents(service, game.id, 1); // g4
+    await service.userMove(game.id, "e5");
+    await gEventsP;
+    const overP = nextEvents(service, game.id, 1); // game_over
+    await service.userMove(game.id, "Qh4");
+    const [over] = await overP;
+    expect(over).toMatchObject({ type: "game_over", result: "0-1", reason: "checkmate" });
+    expect(service.getGame(game.id).status).toBe("over");
+  });
+
+  it("handles resignation", async () => {
+    const { service } = makeService();
+    const game = await service.createGame({ characterId: "hustler", side: "white" });
+    const resigned = await service.resign(game.id);
+    expect(resigned).toMatchObject({
+      status: "over", result: "0-1", endReason: "resignation",
+    });
+  });
+
+  it("answers a draw offer via the stream (declines when clearly better)", async () => {
+    const { service } = makeService({
+      analyze: async (fen) => ({
+        ...stubEval(fen, "e2e4"),
+        lines: [{ pv: ["e2e4"], scoreCp: 400, mate: null, rank: 1 }],
+      }),
+    });
+    const game = await service.createGame({ characterId: "hustler", side: "black" });
+    await nextEvents(service, game.id, 1); // let the AI's first turn set lastEval (+400 = winning for white AI)
+    const eventsP = nextEvents(service, game.id, 1);
+    await service.offerDraw(game.id);
+    const [resp] = await eventsP;
+    expect(resp).toEqual({ type: "draw_response", accepted: false });
+    expect(service.getGame(game.id).status).toBe("active");
+  });
+});
