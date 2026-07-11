@@ -95,6 +95,14 @@ export interface OpeningInfo {
   name?: string;
 }
 
+export type GameStatus =
+  | { over: false }
+  | {
+      over: true;
+      result: '1-0' | '0-1' | '1/2-1/2';
+      reason: 'checkmate' | 'stalemate' | 'draw';
+    };
+
 @Injectable()
 export class ChessService {
   /**
@@ -240,6 +248,30 @@ export class ChessService {
       }
     }
     return sans;
+  }
+
+  /**
+   * Terminal-state check for a position: checkmate (side to move loses),
+   * stalemate, or a rules draw (repetition can't trigger from a lone FEN;
+   * 50-move and insufficient material can).
+   */
+  gameStatus(fen: string): GameStatus {
+    this.assertValidFen(fen);
+    const chess = new Chess(fen);
+    if (chess.isCheckmate()) {
+      return {
+        over: true,
+        result: chess.turn() === 'w' ? '0-1' : '1-0',
+        reason: 'checkmate',
+      };
+    }
+    if (chess.isStalemate()) {
+      return { over: true, result: '1/2-1/2', reason: 'stalemate' };
+    }
+    if (chess.isDraw()) {
+      return { over: true, result: '1/2-1/2', reason: 'draw' };
+    }
+    return { over: false };
   }
 
   /**
