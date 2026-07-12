@@ -5,6 +5,11 @@ import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { Separator } from "@/components/ui/separator";
 import { listCharacters } from "@/lib/api";
 
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return "Something went wrong.";
+}
+
 /**
  * The `/play` route: a roster of characters to challenge. Picking a side on a
  * card creates a game and hands off to `PlayGameView`.
@@ -33,6 +38,12 @@ export function PlayView() {
           <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
             Loading…
+          </div>
+        )}
+
+        {charactersQuery.isError && (
+          <div className="py-10 text-center text-sm text-muted-foreground">
+            Could not load characters. {errorMessage(charactersQuery.error)}
           </div>
         )}
 
