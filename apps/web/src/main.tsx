@@ -14,6 +14,7 @@ import { ThemeProvider } from "@/components/theme/theme-provider";
 import { AnalysisView } from "@/views/AnalysisView";
 import { LibraryView } from "@/views/LibraryView";
 import { PlayView } from "@/views/PlayView";
+import { PlayGameView } from "@/views/PlayGameView";
 import "@/index.css";
 
 const queryClient = new QueryClient({
@@ -42,7 +43,18 @@ const playRoute = createRoute({
   component: PlayView,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, libraryRoute, playRoute]);
+const playGameRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/play/$gameId",
+  component: PlayGameView,
+});
+
+const routeTree = rootRoute.addChildren([
+  indexRoute,
+  libraryRoute,
+  playRoute,
+  playGameRoute,
+]);
 
 const router = createRouter({
   routeTree,

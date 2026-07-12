@@ -32,11 +32,10 @@ export function CharacterCard({ character }: { character: Character }) {
       createPlayGame({ characterId: character.id, side }),
     onSuccess: (game) => {
       usePlayStore.getState().start(game, character);
-      // route registered in Task 12 (play game view)
       void navigate({
         to: "/play/$gameId",
         params: { gameId: game.id },
-      } as never);
+      });
     },
     onError: (err) =>
       toast.error("Could not start game", { description: errorMessage(err) }),
