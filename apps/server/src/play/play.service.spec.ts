@@ -181,6 +181,82 @@ describe("PlayService", () => {
   });
 });
 
+describe("PlayService robustness", () => {
+  it("rejects invalid side values on createGame", async () => {
+    const { service } = makeService();
+    await expect(
+      service.createGame({ characterId: "hustler", side: "purple" as never }),
+    ).rejects.toThrow(BadRequestException);
+    await expect(
+      service.createGame({ characterId: "hustler" } as never),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it("rejects missing or blank chat text", async () => {
+    const { service } = makeService();
+    const game = await service.createGame({ characterId: "hustler", side: "white" });
+    await expect(service.chat(game.id, "")).rejects.toThrow(BadRequestException);
+    await expect(service.chat(game.id, "   ")).rejects.toThrow(BadRequestException);
+    await expect(
+      service.chat(game.id, undefined as never),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it("bails out of aiTurn when the game ends while analyze() is pending", async () => {
+    let resolveAnalyze!: (v: EngineEval) => void;
+    const gate = new Promise<EngineEval>((resolve) => {
+      resolveAnalyze = resolve;
+    });
+    const { service } = makeService({ analyze: async () => gate });
+    const game = await service.createGame({ characterId: "hustler", side: "white" });
+    const eventsP = nextEvents(service, game.id, 1); // only game_over should arrive
+
+    await service.userMove(game.id, "e4"); // schedules aiTurn -> awaits the hung analyze
+    await new Promise((r) => setImmediate(r)); // let aiTurn actually start awaiting
+    await service.resign(game.id); // ends the game while the AI is "thinking"
+
+    resolveAnalyze(stubEval(game.fen, "e7e5")); // release the hung analyze
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    const [event] = await eventsP;
+    expect(event).toMatchObject({ type: "game_over", reason: "resignation" });
+    const after = service.getGame(game.id);
+    expect(after.moves).toHaveLength(1); // only e4 — no stray ai_move after game over
+    expect(after.status).toBe("over");
+  });
+
+  it("revives a bricked game when aiTurn crashes and the user pokes it", async () => {
+    let shouldFail = true;
+    const { service } = makeService({
+      analyze: async (fen) => {
+        if (shouldFail) {
+          shouldFail = false;
+          throw new Error("engine hiccup");
+        }
+        const chess = new ChessService();
+        const san = chess.legalMoves(fen)[0];
+        const uci = chess.applySan(fen, san).move.uci;
+        return stubEval(fen, uci);
+      },
+    });
+    const game = await service.createGame({ characterId: "hustler", side: "white" });
+    const errorP = nextEvents(service, game.id, 1);
+    await service.userMove(game.id, "e4"); // schedules aiTurn -> analyze throws
+    const [errEvent] = await errorP;
+    expect(errEvent.type).toBe("error");
+    expect(service.getGame(game.id).moves).toHaveLength(1); // AI never moved
+    expect(service.getGame(game.id).status).toBe("active");
+
+    // The user's next call is rejected (not their turn) but revives the AI.
+    const aiMoveP = nextEvents(service, game.id, 1);
+    await expect(service.userMove(game.id, "d4")).rejects.toThrow(BadRequestException);
+    const [aiMove] = await aiMoveP;
+    expect(aiMove.type).toBe("ai_move");
+    expect(service.getGame(game.id).moves).toHaveLength(2);
+  });
+});
+
 describe("PlayService mover", () => {
   function moverHarness(reply: string) {
     let emit: ((e: { type: string; delta?: string }) => void) | null = null;

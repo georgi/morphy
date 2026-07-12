@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Logger,
   Param,
   Post,
   Sse,
@@ -26,6 +27,8 @@ import { PlayService } from "./play.service";
  */
 @Controller("play")
 export class PlayController {
+  private readonly logger = new Logger(PlayController.name);
+
   constructor(
     private readonly play: PlayService,
     private readonly registry: CharacterRegistry,
@@ -59,7 +62,9 @@ export class PlayController {
   @Post(":id/draw-offer")
   @HttpCode(HttpStatus.ACCEPTED)
   async drawOffer(@Param("id") id: string): Promise<{ accepted: true }> {
-    void this.play.offerDraw(id);
+    this.play
+      .offerDraw(id)
+      .catch((err) => this.logger.warn(`draw-offer failed: ${String(err)}`));
     return { accepted: true };
   }
 
@@ -69,7 +74,9 @@ export class PlayController {
     @Param("id") id: string,
     @Body() body: PlayChatRequest,
   ): Promise<{ accepted: true }> {
-    void this.play.chat(id, body.text);
+    this.play
+      .chat(id, body.text)
+      .catch((err) => this.logger.warn(`chat failed: ${String(err)}`));
     return { accepted: true };
   }
 

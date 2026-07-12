@@ -59,4 +59,35 @@ describe("PlayController", () => {
     controller.events("g1");
     expect(service.getStream).toHaveBeenCalledWith("g1");
   });
+
+  it("swallows offerDraw/chat rejections instead of crashing the process", async () => {
+    const failing = {
+      ...service,
+      offerDraw: jest.fn(async () => {
+        throw new Error("boom");
+      }),
+      chat: jest.fn(async () => {
+        throw new Error("boom");
+      }),
+    };
+    const module = await Test.createTestingModule({
+      controllers: [PlayController],
+      providers: [
+        { provide: PlayService, useValue: failing },
+        { provide: CharacterRegistry, useValue: registry },
+      ],
+    }).compile();
+    const failingController = module.get(PlayController);
+
+    const unhandled = jest.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      await failingController.drawOffer("g1");
+      await failingController.chat("g1", { text: "hi" });
+      await new Promise((r) => setImmediate(r));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
 });

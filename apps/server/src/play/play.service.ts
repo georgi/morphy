@@ -65,6 +65,9 @@ export class PlayService {
 
   async createGame(req: CreatePlayGameRequest): Promise<PlayGame> {
     const character = this.registry.get(req.characterId); // throws on unknown
+    if (req.side !== "white" && req.side !== "black" && req.side !== "random") {
+      throw new BadRequestException(`Invalid side "${String(req.side)}".`);
+    }
     const rng = Math.random;
     const side =
       req.side === "random" ? (rng() < 0.5 ? "white" : "black") : req.side;
@@ -113,8 +116,13 @@ export class PlayService {
     if (session.thinking)
       throw new BadRequestException("Waiting for the opponent's move.");
     const turn = game.fen.split(" ")[1]; // 'w' | 'b'
-    if (turn !== game.side[0])
+    if (turn !== game.side[0]) {
+      // The AI is on turn but not thinking: a prior aiTurn must have crashed
+      // before completing (engine hiccup), bricking the game. Revive it so
+      // the user's poke gets the AI moving again, then still reject this call.
+      this.scheduleAiTurn(session);
       throw new BadRequestException("Not your turn.");
+    }
 
     let san = moveStr;
     if (/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(moveStr)) {
@@ -163,6 +171,8 @@ export class PlayService {
   }
 
   async chat(id: string, text: string): Promise<void> {
+    if (typeof text !== "string" || !text.trim())
+      throw new BadRequestException("Chat text is required.");
     const session = this.session(id);
     await this.talk(session, this.chatPrompt(session, text));
   }
@@ -213,6 +223,9 @@ export class PlayService {
         depth: character.chess.searchDepth,
         multipv: character.chess.multiPv,
       });
+      // The game may have ended (resign/draw-accept) while analyze() was in
+      // flight. Bail before touching session/game state any further.
+      if (session.game.status !== "active") return;
       const prevEval = session.lastEval; // BEFORE overwrite
       session.lastEval = engineEval;
       if (userSan) {
@@ -252,6 +265,8 @@ export class PlayService {
       });
 
       const pick = await this.pickMove(session, candidates);
+      // Same guard after the (potentially slow) LLM mover call.
+      if (session.game.status !== "active") return;
       const chosen =
         candidates.find((c) => c.uci === pick?.move) ??
         candidates.find((c) => !c.offbeat) ??
@@ -375,6 +390,16 @@ export class PlayService {
     session.game.endReason = reason;
     session.subject.next({ type: "game_over", result, reason });
     void this.talk(session, this.partingShotPrompt(session));
+    // Release the LLM runners once the parting shot (and anything queued
+    // before it) has settled — no more turns are coming for a finished game.
+    session.talkQueue = session.talkQueue.then(async () => {
+      try {
+        await session.mover?.dispose?.();
+        await session.talker?.dispose?.();
+      } catch (err) {
+        this.logger.debug(`runner dispose failed: ${String(err)}`);
+      }
+    });
   }
 
   /** Serialized talker turn: chain onto talkQueue so turns never interleave. */
