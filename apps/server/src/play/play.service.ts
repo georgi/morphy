@@ -120,7 +120,7 @@ export class PlayService {
       // The AI is on turn but not thinking: a prior aiTurn must have crashed
       // before completing (engine hiccup), bricking the game. Revive it so
       // the user's poke gets the AI moving again, then still reject this call.
-      this.scheduleAiTurn(session);
+      if (!session.thinking) this.scheduleAiTurn(session);
       throw new BadRequestException("Not your turn.");
     }
 
@@ -391,7 +391,9 @@ export class PlayService {
     session.subject.next({ type: "game_over", result, reason });
     void this.talk(session, this.partingShotPrompt(session));
     // Release the LLM runners once the parting shot (and anything queued
-    // before it) has settled — no more turns are coming for a finished game.
+    // before it) has settled. Null the handles so a post-game chat lazily
+    // recreates the talker (fresh context is acceptable) instead of
+    // prompting a disposed session.
     session.talkQueue = session.talkQueue.then(async () => {
       try {
         await session.mover?.dispose?.();
@@ -399,6 +401,8 @@ export class PlayService {
       } catch (err) {
         this.logger.debug(`runner dispose failed: ${String(err)}`);
       }
+      session.mover = null;
+      session.talker = null;
     });
   }
 

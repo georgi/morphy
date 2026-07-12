@@ -358,16 +358,20 @@ describe("PlayService talker", () => {
         async (cfg: { systemPrompt: string; emit: (e: never) => void }) => {
           const record = { systemPrompt: cfg.systemPrompt, prompts: [] as string[] };
           created.push(record);
+          let disposed = false;
           return {
             id: `s${created.length}`,
             prompt: jest.fn(async (text: string) => {
+              if (disposed) throw new Error("session disposed");
               record.prompts.push(text);
               (cfg.emit as (e: { type: string; delta: string }) => void)({
                 type: "text_delta",
                 delta: "Ha! ",
               });
             }),
-            dispose: jest.fn(),
+            dispose: jest.fn(() => {
+              disposed = true;
+            }),
           };
         },
       ),
@@ -390,6 +394,23 @@ describe("PlayService talker", () => {
     const talker = created.find((c) => c.systemPrompt.includes("talking across the board"));
     expect(talker?.prompts[0]).toContain("you nervous yet?");
     expect(talker?.prompts[0]).toContain(game.fen);
+  });
+
+  it("keeps chat usable after game over (recreates the disposed talker)", async () => {
+    const { service, created } = talkerSetup();
+    const game = await service.createGame({ characterId: "hustler", side: "white" });
+    const overP = nextEvents(service, game.id, 3); // game_over, chat_delta, chat_done
+    await service.resign(game.id);
+    await overP; // parting shot has streamed; disposal is chained after it
+    await new Promise((r) => setImmediate(r)); // let the dispose chain settle
+
+    const chatP = nextEvents(service, game.id, 2);
+    await service.chat(game.id, "good game, rematch?");
+    const [delta, done] = await chatP;
+    expect(delta).toEqual({ type: "chat_delta", delta: "Ha! " });
+    expect(done).toEqual({ type: "chat_done" });
+    const lastTalker = created.at(-1);
+    expect(lastTalker?.prompts.at(-1)).toContain("good game, rematch?");
   });
 
   it("sends a parting shot after game over", async () => {
