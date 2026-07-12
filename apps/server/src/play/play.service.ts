@@ -27,7 +27,7 @@ import {
 import { CharacterRegistry } from "./character-registry.service";
 import type { CharacterConfig } from "./characters.data";
 import { buildCandidates, type Candidate } from "./move-candidates";
-import { cooldownPlies, detectMoment } from "./banter";
+import { cooldownPlies, detectMoment, isCriticalChoice } from "./banter";
 import type { EngineEval } from "@chess/shared";
 
 const START_FEN =
@@ -35,7 +35,7 @@ const START_FEN =
 /** Character accepts a draw when its POV advantage is at most this. */
 const DRAW_ACCEPT_MAX_CP = 50;
 /** Model used for the mover and talker sessions. */
-const PLAY_MODEL = "openrouter/free";
+const PLAY_MODEL = "gpt-5.6-luna";
 
 interface PlaySession {
   game: PlayGame;
@@ -228,17 +228,18 @@ export class PlayService {
       if (session.game.status !== "active") return;
       const prevEval = session.lastEval; // BEFORE overwrite
       session.lastEval = engineEval;
-      if (userSan) {
-        const moment = detectMoment({
-          prevBestCp: prevEval?.lines[0]?.scoreCp ?? null,
-          currBestCp: engineEval.lines[0]?.scoreCp ?? null,
-          aiHasMate: this.aiHasMate(engineEval, game),
-          userSide: game.side === "white" ? "w" : "b",
-          userSan,
-        });
+      const moment = userSan
+        ? detectMoment({
+            prevBestCp: prevEval?.lines[0]?.scoreCp ?? null,
+            currBestCp: engineEval.lines[0]?.scoreCp ?? null,
+            aiHasMate: this.aiHasMate(engineEval, game),
+            userSide: game.side === "white" ? "w" : "b",
+            userSan,
+          })
+        : null;
+      if (userSan && moment) {
         const sincePly = game.moves.length - session.lastBanterPly;
         if (
-          moment &&
           character.banter.triggers.includes(moment) &&
           sincePly >= cooldownPlies(character.banter.chattiness)
         ) {
@@ -264,7 +265,11 @@ export class PlayService {
         rng: session.rng,
       });
 
-      const pick = await this.pickMove(session, candidates);
+      // Routine positions play the engine's best move directly — the LLM is
+      // consulted only when the choice can actually express character.
+      const pick = isCriticalChoice(candidates, moment)
+        ? await this.pickMove(session, candidates)
+        : null;
       // Same guard after the (potentially slow) LLM mover call.
       if (session.game.status !== "active") return;
       const chosen =
@@ -277,7 +282,12 @@ export class PlayService {
       const move = game.moves[game.moves.length - 1];
       session.subject.next({ type: "ai_move", move, fen: game.fen });
       if (pick?.move === chosen.uci && pick.comment?.trim()) {
-        session.subject.next({ type: "banter", text: pick.comment.trim() });
+        // Move comments respect the same chattiness cooldown as event banter.
+        const sincePly = game.moves.length - session.lastBanterPly;
+        if (sincePly >= cooldownPlies(character.banter.chattiness)) {
+          session.lastBanterPly = game.moves.length;
+          session.subject.next({ type: "banter", text: pick.comment.trim() });
+        }
       }
 
       const status = this.chess.gameStatus(game.fen);

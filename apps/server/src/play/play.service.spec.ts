@@ -258,7 +258,8 @@ describe("PlayService robustness", () => {
 });
 
 describe("PlayService mover", () => {
-  function moverHarness(reply: string) {
+  function moverHarness(replies: string | string[]) {
+    const queue = Array.isArray(replies) ? [...replies] : [replies];
     let emit: ((e: { type: string; delta?: string }) => void) | null = null;
     const prompts: string[] = [];
     return {
@@ -273,6 +274,8 @@ describe("PlayService mover", () => {
             id: "mover",
             prompt: jest.fn(async (text: string) => {
               prompts.push(text);
+              // Consume replies in order; the last one repeats.
+              const reply = queue.length > 1 ? queue.shift()! : queue[0];
               emit!({ type: "text_delta", delta: reply });
             }),
             dispose: jest.fn(),
@@ -283,25 +286,28 @@ describe("PlayService mover", () => {
     };
   }
 
-  function makeMoverService(reply: string) {
+  type EvalLine = { pv: string[]; scoreCp: number; mate: null; rank: number };
+
+  function makeMoverService(
+    replies: string | string[],
+    // Wide spread by default so the choice is "critical" and the LLM is consulted.
+    lines: EvalLine[] | ((fen: string) => EvalLine[]) = [
+      { pv: ["d2d4"], scoreCp: 30, mate: null, rank: 1 },
+      { pv: ["g1f3"], scoreCp: -20, mate: null, rank: 2 },
+    ],
+  ) {
     const chess = new ChessService();
-    // Two candidate lines so the LLM has a real choice: best d2d4, second g1f3.
     const engine = {
-      analyze: jest.fn(async (fen: string) => ({
-        fen,
-        bestMove: "d2d4",
-        depth: 8,
-        lines: [
-          { pv: ["d2d4"], scoreCp: 30, mate: null, rank: 1 },
-          { pv: ["g1f3"], scoreCp: 20, mate: null, rank: 2 },
-        ],
-      })),
+      analyze: jest.fn(async (fen: string) => {
+        const resolved = typeof lines === "function" ? lines(fen) : lines;
+        return { fen, bestMove: resolved[0]?.pv[0] ?? null, depth: 8, lines: resolved };
+      }),
     };
-    const { harness, prompts } = moverHarness(reply);
+    const { harness, prompts } = moverHarness(replies);
     const service = new PlayService(
       chess, engine as never, new CharacterRegistry(), harness as never,
     );
-    return { service, prompts };
+    return { service, prompts, harness };
   }
 
   it("plays the LLM's candidate pick and emits its comment as banter", async () => {
@@ -333,6 +339,60 @@ describe("PlayService mover", () => {
     const game = await service.createGame({ characterId: "hustler", side: "black" });
     const [aiMove] = await nextEvents(service, game.id, 1);
     expect((aiMove as { move: { san: string } }).move.san).toBe("d4");
+  });
+
+  it("plays engine best WITHOUT consulting the LLM when candidates are near-equal", async () => {
+    const { service, harness } = makeMoverService(
+      '{"move":"g1f3","comment":"should never be asked"}',
+      [
+        { pv: ["d2d4"], scoreCp: 30, mate: null, rank: 1 },
+        { pv: ["g1f3"], scoreCp: 20, mate: null, rank: 2 }, // 10cp spread: routine
+      ],
+    );
+    const game = await service.createGame({ characterId: "hustler", side: "black" });
+    const [aiMove] = await nextEvents(service, game.id, 1);
+    expect((aiMove as { move: { san: string } }).move.san).toBe("d4");
+    // No mover session was ever created — the LLM was not consulted.
+    expect(harness.createSession).not.toHaveBeenCalled();
+  });
+
+  it("suppresses the mover's comment while the chattiness cooldown is active", async () => {
+    // Morphy: chattiness "medium" → 4-ply cooldown, eval window 70 (so the
+    // 50cp-spread candidates below survive). Both AI turns are critical and
+    // both LLM picks are honored with a comment; only the first comment may
+    // pass — the second lands 2 plies later, inside the cooldown window.
+    const startLines: EvalLine[] = [
+      { pv: ["d2d4"], scoreCp: 30, mate: null, rank: 1 },
+      { pv: ["g1f3"], scoreCp: -20, mate: null, rank: 2 },
+    ];
+    const laterLines: EvalLine[] = [
+      { pv: ["c2c4"], scoreCp: 30, mate: null, rank: 1 },
+      { pv: ["e2e4"], scoreCp: -20, mate: null, rank: 2 },
+    ];
+    const { service } = makeMoverService(
+      [
+        '{"move":"d2d4","comment":"Objectively winning."}',
+        '{"move":"c2c4","comment":"Still winning."}',
+      ],
+      (fen) => (fen.includes("PPPPPPPP") ? startLines : laterLines),
+    );
+    const game = await service.createGame({ characterId: "morphy", side: "black" });
+    const [first, second] = await nextEvents(service, game.id, 2);
+    expect(first).toMatchObject({ type: "ai_move" });
+    // First comment passes (no banter has fired yet this game).
+    expect(second).toEqual({ type: "banter", text: "Objectively winning." });
+    // Second consulted move, 2 plies later: comment must be suppressed.
+    const nextP = nextEvents(service, game.id, 1);
+    await service.userMove(game.id, "e6");
+    const [reply] = await nextP;
+    expect(reply).toMatchObject({ type: "ai_move" });
+    expect((reply as { move: { san: string } }).move.san).toBe("c4");
+    // Give any (wrongly) queued banter a chance to arrive, then assert silence.
+    const drained = await Promise.race([
+      nextEvents(service, game.id, 1).then((es) => es.map((e) => e.type)),
+      new Promise<string[]>((r) => setTimeout(() => r(["<none>"]), 150)),
+    ]);
+    expect(drained).toEqual(["<none>"]);
   });
 });
 

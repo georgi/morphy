@@ -1,4 +1,4 @@
-import { cooldownPlies, detectMoment } from "./banter";
+import { cooldownPlies, detectMoment, isCriticalChoice } from "./banter";
 
 const base = {
   prevBestCp: 0,
@@ -53,5 +53,32 @@ describe("cooldownPlies", () => {
     expect(cooldownPlies("low")).toBe(8);
     expect(cooldownPlies("medium")).toBe(4);
     expect(cooldownPlies("high")).toBe(2);
+  });
+});
+
+describe("isCriticalChoice", () => {
+  const c = (scoreCp: number | null, extra?: Partial<{ mate: number | null; offbeat: boolean }>) => ({
+    scoreCp,
+    mate: extra?.mate ?? null,
+    offbeat: extra?.offbeat ?? false,
+  });
+
+  it("is routine with fewer than two candidates", () => {
+    expect(isCriticalChoice([], null)).toBe(false);
+    expect(isCriticalChoice([c(30)], "user-blunder")).toBe(false);
+  });
+
+  it("is critical when a moment just happened", () => {
+    expect(isCriticalChoice([c(30), c(25)], "user-blunder")).toBe(true);
+  });
+
+  it("is critical when a mate or offbeat option is on the menu", () => {
+    expect(isCriticalChoice([c(null, { mate: 3 }), c(30)], null)).toBe(true);
+    expect(isCriticalChoice([c(30), c(null, { offbeat: true })], null)).toBe(true);
+  });
+
+  it("is critical only when candidate evals genuinely diverge", () => {
+    expect(isCriticalChoice([c(30), c(20)], null)).toBe(false); // 10cp: routine
+    expect(isCriticalChoice([c(30), c(-20)], null)).toBe(true); // 50cp: stylistic fork
   });
 });
