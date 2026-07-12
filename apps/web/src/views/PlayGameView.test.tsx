@@ -191,10 +191,20 @@ describe("PlayGameView", () => {
       });
     });
 
-    expect(
-      (screen.getByRole("button", { name: /resign/i }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
+    // The game-over overlay is modal while shown, which hides the board
+    // controls from the accessibility tree — dismiss it (as a user would, to
+    // keep chatting/inspecting the final position) before asserting on them.
+    await waitFor(() =>
+      expect(screen.getByRole("dialog")).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
+
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: /resign/i }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(true),
+    );
     expect(
       (
         screen.getByRole("button", {

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PlayChat } from "@/components/play/PlayChat";
+import { GameOverOverlay } from "@/components/play/GameOverOverlay";
 import {
   ApiError,
   getPlayGame,
@@ -145,7 +146,12 @@ export function PlayGameView() {
     );
   }
 
-  return <PlayGameLayout gameId={gameId} game={game} character={character} thinking={thinking} />;
+  return (
+    <>
+      <PlayGameLayout gameId={gameId} game={game} character={character} thinking={thinking} />
+      <GameOverOverlay />
+    </>
+  );
 }
 
 function GameNotFoundCard() {
