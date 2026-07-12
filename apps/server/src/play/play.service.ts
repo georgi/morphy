@@ -276,10 +276,21 @@ export class PlayService {
       session.moverOut.text = "";
       await session.mover.prompt(this.moverTurnPrompt(session, candidates));
       const match = session.moverOut.text.match(/\{[\s\S]*\}/);
-      if (!match) return null;
+      if (!match) {
+        this.logger.debug("mover returned no JSON, using engine best");
+        return null;
+      }
       const parsed = JSON.parse(match[0]) as { move?: unknown; comment?: unknown };
-      if (typeof parsed.move !== "string") return null;
-      if (!candidates.some((c) => c.uci === parsed.move)) return null;
+      if (typeof parsed.move !== "string") {
+        this.logger.debug("mover JSON has no move string, using engine best");
+        return null;
+      }
+      if (!candidates.some((c) => c.uci === parsed.move)) {
+        this.logger.debug(
+          `mover picked non-candidate "${parsed.move}", using engine best`,
+        );
+        return null;
+      }
       return {
         move: parsed.move,
         comment: typeof parsed.comment === "string" ? parsed.comment : undefined,
