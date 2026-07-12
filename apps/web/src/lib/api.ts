@@ -309,25 +309,11 @@ export function sendPlayChat(id: string, text: string): Promise<void> {
 
 /**
  * Opens a persistent SSE stream of {@link PlayEvent}s for a play-mode game.
- * The caller owns the returned {@link EventSource} and must `.close()` it.
+ * The caller owns the returned {@link EventSource}: it wires `onmessage`
+ * (parsing each frame as a {@link PlayEvent}) and must `.close()` it.
  */
-export function openPlayStream(
-  id: string,
-  onEvent?: (e: PlayEvent) => void,
-): EventSource {
-  const source = new EventSource(
-    `${BASE}/play/${encodeURIComponent(id)}/events`,
-  );
-  if (onEvent) {
-    source.onmessage = (msg) => {
-      try {
-        onEvent(JSON.parse(msg.data) as PlayEvent);
-      } catch {
-        // ignore malformed frames; the server controls the wire format
-      }
-    };
-  }
-  return source;
+export function openPlayStream(id: string): EventSource {
+  return new EventSource(`${BASE}/play/${encodeURIComponent(id)}/events`);
 }
 
 export { ApiError };
