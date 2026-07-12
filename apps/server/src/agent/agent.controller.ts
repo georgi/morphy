@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Logger,
   Param,
   Post,
   Query,
@@ -38,6 +39,8 @@ import { AgentService } from './agent.service';
  */
 @Controller('agent')
 export class AgentController {
+  private readonly logger = new Logger(AgentController.name);
+
   constructor(private readonly agent: AgentService) {}
 
   /** List the models the active backend offers. */
@@ -82,7 +85,9 @@ export class AgentController {
     @Param('sessionId') sessionId: string,
     @Body() body: AgentMessageRequest,
   ): { accepted: true } {
-    void this.agent.sendMessage(sessionId, body);
+    this.agent
+      .sendMessage(sessionId, body)
+      .catch((err) => this.logger.warn(`sendMessage failed: ${String(err)}`));
     return { accepted: true };
   }
 }

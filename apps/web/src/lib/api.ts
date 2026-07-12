@@ -19,6 +19,10 @@ import type {
   ModelInfo,
   SessionSummary,
   TranscriptMessage,
+  Character,
+  CreatePlayGameRequest,
+  PlayGame,
+  PlayEvent,
 } from "@chess/shared";
 
 const BASE = "/api";
@@ -253,6 +257,63 @@ export function openAgentStream(
     }
   };
   return source;
+}
+
+/** The play-mode character roster for the picker. */
+export function listCharacters(): Promise<Character[]> {
+  return request<Character[]>("/play/characters");
+}
+
+/** Start a new play-mode game against a character. */
+export function createPlayGame(body: CreatePlayGameRequest): Promise<PlayGame> {
+  return request<PlayGame>("/play", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/** Fetch the current state of a play-mode game. */
+export function getPlayGame(id: string): Promise<PlayGame> {
+  return request<PlayGame>(`/play/${encodeURIComponent(id)}`);
+}
+
+/** Submit the human's move (SAN or UCI); the AI reply arrives over the stream. */
+export function sendPlayMove(id: string, move: string): Promise<PlayGame> {
+  return request<PlayGame>(`/play/${encodeURIComponent(id)}/move`, {
+    method: "POST",
+    body: JSON.stringify({ move }),
+  });
+}
+
+/** Resign the game on the human's behalf. */
+export function resignPlayGame(id: string): Promise<PlayGame> {
+  return request<PlayGame>(`/play/${encodeURIComponent(id)}/resign`, {
+    method: "POST",
+  });
+}
+
+/** Offer a draw; the character's `draw_response` arrives over the stream. */
+export function offerPlayDraw(id: string): Promise<void> {
+  return request<void>(`/play/${encodeURIComponent(id)}/draw-offer`, {
+    method: "POST",
+  });
+}
+
+/** Send a chat message to the character; the reply streams as `chat_delta`s. */
+export function sendPlayChat(id: string, text: string): Promise<void> {
+  return request<void>(`/play/${encodeURIComponent(id)}/chat`, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}
+
+/**
+ * Opens a persistent SSE stream of {@link PlayEvent}s for a play-mode game.
+ * The caller owns the returned {@link EventSource}: it wires `onmessage`
+ * (parsing each frame as a {@link PlayEvent}) and must `.close()` it.
+ */
+export function openPlayStream(id: string): EventSource {
+  return new EventSource(`${BASE}/play/${encodeURIComponent(id)}/events`);
 }
 
 export { ApiError };

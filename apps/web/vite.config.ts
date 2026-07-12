@@ -10,6 +10,12 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  // @chess/shared is a linked CJS workspace package; its re-exported names
+  // (contentHash, normalizedSanList) are getter-based and invisible to the dev
+  // server's static CJS lexer unless the package is pre-bundled.
+  optimizeDeps: {
+    include: ["@chess/shared"],
+  },
   server: {
     port: 5173,
     proxy: {

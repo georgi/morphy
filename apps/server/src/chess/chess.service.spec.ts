@@ -306,4 +306,43 @@ describe('ChessService', () => {
       expect(service.identifyOpening(['h4'])).toEqual({});
     });
   });
+
+  describe('gameStatus', () => {
+    it('reports an ongoing game', () => {
+      expect(
+        service.gameStatus(
+          'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+        ),
+      ).toEqual({ over: false });
+    });
+
+    it('reports checkmate with the winner', () => {
+      // Fool's mate final position: Black has mated White.
+      const fen =
+        'rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3';
+      expect(service.gameStatus(fen)).toEqual({
+        over: true,
+        result: '0-1',
+        reason: 'checkmate',
+      });
+    });
+
+    it('reports stalemate as a draw', () => {
+      const fen = '7k/5Q2/6K1/8/8/8/8/8 b - - 0 1'; // black to move, stalemated
+      expect(service.gameStatus(fen)).toEqual({
+        over: true,
+        result: '1/2-1/2',
+        reason: 'stalemate',
+      });
+    });
+
+    it('reports insufficient material as a draw', () => {
+      const fen = '8/8/4k3/8/8/4K3/8/8 w - - 0 1';
+      expect(service.gameStatus(fen)).toEqual({
+        over: true,
+        result: '1/2-1/2',
+        reason: 'draw',
+      });
+    });
+  });
 });

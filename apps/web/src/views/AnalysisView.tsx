@@ -6,6 +6,7 @@ import {
   Loader2,
   PanelRightClose,
   PanelRightOpen,
+  Swords,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -102,6 +103,12 @@ export function AnalysisView() {
             <Link to="/library">
               <Library />
               Library
+            </Link>
+          </Button>
+          <Button variant="ghost" size="sm" asChild>
+            <Link to="/play">
+              <Swords />
+              Play
             </Link>
           </Button>
           <ImportDialog />
