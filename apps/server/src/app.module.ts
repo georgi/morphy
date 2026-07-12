@@ -7,6 +7,7 @@ import { AnalysisModule } from './analysis/analysis.module';
 import { ApiModule } from './api/api.module';
 import { AgentModule } from './agent/agent.module';
 import { ImportModule } from './import/import.module';
+import { PlayModule } from './play/play.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { ImportModule } from './import/import.module';
     ApiModule,
     AgentModule,
     ImportModule,
+    PlayModule,
   ],
   controllers: [AppController],
 })

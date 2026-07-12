@@ -1,6 +1,6 @@
 import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { firstValueFrom } from "rxjs";
-import { filter, map, take, toArray } from "rxjs/operators";
+import { filter, map, skip, take, toArray } from "rxjs/operators";
 import type { EngineEval, PlayEvent } from "@chess/shared";
 import { ChessService } from "../chess/chess.service";
 import { CharacterRegistry } from "./character-registry.service";
@@ -49,11 +49,20 @@ function makeService(overrides?: {
   return { service, engine, harness, chess };
 }
 
-/** Collect the next `n` PlayEvents from a game's stream. */
+/**
+ * Collect the next `n` PlayEvents from a game's stream. The service now backs
+ * streams with a ReplaySubject, so a fresh subscription replays everything
+ * already emitted; track how many events each game id has already handed out
+ * so repeated calls only observe genuinely new events.
+ */
+const consumedByGame = new Map<string, number>();
 function nextEvents(service: PlayService, id: string, n: number) {
+  const alreadyConsumed = consumedByGame.get(id) ?? 0;
+  consumedByGame.set(id, alreadyConsumed + n);
   return firstValueFrom(
     service.getStream(id).pipe(
       map((m) => JSON.parse(m.data as string) as PlayEvent),
+      skip(alreadyConsumed),
       take(n),
       toArray(),
     ),
@@ -117,6 +126,15 @@ describe("PlayService", () => {
     const [aiMove] = await nextEvents(service, game.id, 1);
     expect(aiMove.type).toBe("ai_move");
     expect(service.getGame(game.id).moves[0].color).toBe("w");
+  });
+
+  it("replays the AI's first move even when the subscriber attaches after it fired", async () => {
+    const { service } = makeService();
+    const game = await service.createGame({ characterId: "hustler", side: "black" });
+    // Give the AI's scheduled turn a full macrotask to run BEFORE we subscribe.
+    await new Promise((r) => setImmediate(r));
+    const [aiMove] = await nextEvents(service, game.id, 1);
+    expect(aiMove.type).toBe("ai_move");
   });
 
   it("ends the game on checkmate delivered by the user", async () => {

@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import type { MessageEvent } from "@nestjs/common";
-import { Observable, Subject } from "rxjs";
+import { Observable, ReplaySubject } from "rxjs";
 import { map } from "rxjs/operators";
 import { v4 as uuidv4 } from "uuid";
 import type {
@@ -40,7 +40,7 @@ const PLAY_MODEL = "openrouter/free";
 interface PlaySession {
   game: PlayGame;
   character: CharacterConfig;
-  subject: Subject<PlayEvent>;
+  subject: ReplaySubject<PlayEvent>;
   mover: AgentRunner | null; // created lazily in Task 7
   talker: AgentRunner | null; // created lazily in Task 8
   moverOut: { text: string }; // mover emit sink
@@ -80,7 +80,7 @@ export class PlayService {
     const session: PlaySession = {
       game,
       character,
-      subject: new Subject<PlayEvent>(),
+      subject: new ReplaySubject<PlayEvent>(50),
       mover: null,
       talker: null,
       moverOut: { text: "" },
@@ -359,7 +359,7 @@ export class PlayService {
   private recentSans(game: PlayGame): string {
     return game.moves
       .slice(-6)
-      .map((m) =>
+      .map((m: Move) =>
         m.color === "w" ? `${m.moveNumber}.${m.san}` : `${m.moveNumber}...${m.san}`,
       )
       .join(" ");

@@ -40,6 +40,6 @@ export function createHarnessFromEnv(
     { provide: AGENT_HARNESS, useFactory: () => createHarnessFromEnv() },
     { provide: MODEL_FILTER, useFactory: () => createModelFilterFromEnv() },
   ],
-  exports: [AgentService],
+  exports: [AgentService, AGENT_HARNESS],
 })
 export class AgentModule {}
