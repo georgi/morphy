@@ -27,6 +27,8 @@ import {
 import { CharacterRegistry } from "./character-registry.service";
 import type { CharacterConfig } from "./characters.data";
 import { buildCandidates, type Candidate } from "./move-candidates";
+import { cooldownPlies, detectMoment } from "./banter";
+import type { EngineEval } from "@chess/shared";
 
 const START_FEN =
   "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -203,7 +205,7 @@ export class PlayService {
    * The AI's turn. Task 6 version: engine best move only (no LLM). Task 7
    * replaces the selection with the mover session; Task 8 adds banter.
    */
-  private async aiTurn(session: PlaySession, _userSan?: string): Promise<void> {
+  private async aiTurn(session: PlaySession, userSan?: string): Promise<void> {
     session.thinking = true;
     try {
       const { game, character } = session;
@@ -211,7 +213,26 @@ export class PlayService {
         depth: character.chess.searchDepth,
         multipv: character.chess.multiPv,
       });
+      const prevEval = session.lastEval; // BEFORE overwrite
       session.lastEval = engineEval;
+      if (userSan) {
+        const moment = detectMoment({
+          prevBestCp: prevEval?.lines[0]?.scoreCp ?? null,
+          currBestCp: engineEval.lines[0]?.scoreCp ?? null,
+          aiHasMate: this.aiHasMate(engineEval, game),
+          userSide: game.side === "white" ? "w" : "b",
+          userSan,
+        });
+        const sincePly = game.moves.length - session.lastBanterPly;
+        if (
+          moment &&
+          character.banter.triggers.includes(moment) &&
+          sincePly >= cooldownPlies(character.banter.chattiness)
+        ) {
+          session.lastBanterPly = game.moves.length;
+          void this.talk(session, this.momentPrompt(session, moment, userSan));
+        }
+      }
 
       const candidates = buildCandidates({
         engineEval,
@@ -356,16 +377,87 @@ export class PlayService {
     void this.talk(session, this.partingShotPrompt(session));
   }
 
-  /** Serialized talker turn. Task 6 version: no-op (Task 8 implements). */
-  private talk(_session: PlaySession, _prompt: string): Promise<void> {
-    return Promise.resolve();
+  /** Serialized talker turn: chain onto talkQueue so turns never interleave. */
+  private talk(session: PlaySession, prompt: string): Promise<void> {
+    if (!prompt) return Promise.resolve();
+    session.talkQueue = session.talkQueue.then(async () => {
+      try {
+        if (!session.talker) {
+          session.talker = await this.harness.createSession({
+            systemPrompt: this.talkerSystemPrompt(session.character),
+            tools: [],
+            model: PLAY_MODEL,
+            emit: (e) => {
+              if (e.type === "text_delta")
+                session.subject.next({ type: "chat_delta", delta: e.delta });
+            },
+          });
+        }
+        await session.talker.prompt(prompt);
+        session.subject.next({ type: "chat_done" });
+      } catch (err) {
+        session.subject.next({
+          type: "error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+    return session.talkQueue;
   }
 
-  private chatPrompt(_session: PlaySession, text: string): string {
-    return text; // enriched in Task 8
+  private talkerSystemPrompt(character: CharacterConfig): string {
+    return (
+      `${character.personaPrompt}\n\n` +
+      `You are playing a live game against the user and talking across the board. ` +
+      `You will receive game events and user messages with position context. ` +
+      `Respond in character, 1-3 short sentences. Never reveal the engine's ` +
+      `evaluation or suggest moves for the user's current position.`
+    );
   }
 
-  private partingShotPrompt(_session: PlaySession): string {
-    return ""; // implemented in Task 8
+  private aiHasMate(engineEval: EngineEval, _game: PlayGame): boolean {
+    const mate = engineEval.lines[0]?.mate;
+    // analyze() ran on a position where the AI is to move; mate > 0 = side to move mates.
+    return mate !== null && mate !== undefined && mate > 0;
+  }
+
+  private momentPrompt(
+    session: PlaySession,
+    moment: string,
+    userSan: string,
+  ): string {
+    const { game } = session;
+    return (
+      `Game event: the user just played ${userSan}. Assessment: ${moment}. ` +
+      `Position (FEN): ${game.fen}. Recent moves: ${this.recentSans(game)}. ` +
+      `React in character in one or two short sentences.`
+    );
+  }
+
+  private chatPrompt(session: PlaySession, text: string): string {
+    const { game } = session;
+    const turn = game.fen.split(" ")[1] === game.side[0] ? "the user" : "you";
+    return (
+      `Position (FEN): ${game.fen}. Recent moves: ${
+        this.recentSans(game) || "(game start)"
+      }. It is ${turn} to move.\n\nThe user says: ${text}`
+    );
+  }
+
+  private partingShotPrompt(session: PlaySession): string {
+    const { game } = session;
+    if (!game.result || !game.endReason) return "";
+    const characterIsWhite = game.side === "black";
+    const outcome =
+      game.result === "1/2-1/2"
+        ? "a draw"
+        : (game.result === "1-0") === characterIsWhite
+          ? "you won"
+          : "you lost";
+    return (
+      `The game just ended: ${game.result} by ${game.endReason} — ${outcome}, ` +
+      `from your perspective. Final position (FEN): ${game.fen}. ` +
+      `Give your in-character parting line (1-2 sentences).`
+    );
   }
 }

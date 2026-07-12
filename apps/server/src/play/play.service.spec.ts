@@ -241,3 +241,73 @@ describe("PlayService mover", () => {
     expect((aiMove as { move: { san: string } }).move.san).toBe("d4");
   });
 });
+
+describe("PlayService talker", () => {
+  function talkerSetup() {
+    const chess = new ChessService();
+    const engine = {
+      analyze: jest.fn(async (fen: string) => {
+        const san = chess.legalMoves(fen)[0];
+        const uci = chess.applySan(fen, san).move.uci;
+        return {
+          fen, bestMove: uci, depth: 8,
+          lines: [{ pv: [uci], scoreCp: 20, mate: null, rank: 1 }],
+        };
+      }),
+    };
+    const created: Array<{ systemPrompt: string; prompts: string[] }> = [];
+    const harness = {
+      listModels: jest.fn(async () => []),
+      listSessions: jest.fn(async () => []),
+      getSessionMessages: jest.fn(async () => []),
+      createSession: jest.fn(
+        async (cfg: { systemPrompt: string; emit: (e: never) => void }) => {
+          const record = { systemPrompt: cfg.systemPrompt, prompts: [] as string[] };
+          created.push(record);
+          return {
+            id: `s${created.length}`,
+            prompt: jest.fn(async (text: string) => {
+              record.prompts.push(text);
+              (cfg.emit as (e: { type: string; delta: string }) => void)({
+                type: "text_delta",
+                delta: "Ha! ",
+              });
+            }),
+            dispose: jest.fn(),
+          };
+        },
+      ),
+      resumeSession: jest.fn(),
+    };
+    const service = new PlayService(
+      chess, engine as never, new CharacterRegistry(), harness as never,
+    );
+    return { service, created };
+  }
+
+  it("streams a chat reply as chat_delta then chat_done", async () => {
+    const { service, created } = talkerSetup();
+    const game = await service.createGame({ characterId: "hustler", side: "white" });
+    const eventsP = nextEvents(service, game.id, 2);
+    await service.chat(game.id, "you nervous yet?");
+    const [delta, done] = await eventsP;
+    expect(delta).toEqual({ type: "chat_delta", delta: "Ha! " });
+    expect(done).toEqual({ type: "chat_done" });
+    const talker = created.find((c) => c.systemPrompt.includes("talking across the board"));
+    expect(talker?.prompts[0]).toContain("you nervous yet?");
+    expect(talker?.prompts[0]).toContain(game.fen);
+  });
+
+  it("sends a parting shot after game over", async () => {
+    const { service, created } = talkerSetup();
+    const game = await service.createGame({ characterId: "hustler", side: "white" });
+    const eventsP = nextEvents(service, game.id, 3); // game_over, chat_delta, chat_done
+    await service.resign(game.id);
+    const [over, delta, done] = await eventsP;
+    expect(over).toMatchObject({ type: "game_over", reason: "resignation" });
+    expect(delta).toMatchObject({ type: "chat_delta" });
+    expect(done).toEqual({ type: "chat_done" });
+    const talker = created.find((c) => c.systemPrompt.includes("talking across the board"));
+    expect(talker?.prompts.at(-1)).toContain("resignation");
+  });
+});
