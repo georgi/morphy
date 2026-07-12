@@ -29,6 +29,36 @@ describe("playStore", () => {
     expect(st.thinking).toBe(false);
   });
 
+  it("ignores replayed ai_move events already in the game snapshot", () => {
+    // Deep-link/refresh: the server stream replays past events, but the
+    // getPlayGame snapshot already contains those moves.
+    const move1: Move = {
+      ply: 1, moveNumber: 1, color: "w", san: "e4", uci: "e2e4",
+      fenBefore: "fen-0", fenAfter: "fen-1",
+    };
+    const move2: Move = { ...aiMove }; // ply 2
+    const s = usePlayStore.getState();
+    s.start({ ...game, moves: [move1, move2], fen: "fen-2" }, character);
+    s.setThinking(true);
+
+    // Stale replay of the ply-2 AI move: no duplicate append, thinking cleared.
+    s.applyEvent({ type: "ai_move", move: move2, fen: "fen-2" });
+    let st = usePlayStore.getState();
+    expect(st.game?.moves).toHaveLength(2);
+    expect(st.game?.fen).toBe("fen-2");
+    expect(st.thinking).toBe(false);
+
+    // A genuinely new ply-3 move still appends.
+    const move3: Move = {
+      ply: 3, moveNumber: 2, color: "w", san: "Nf3", uci: "g1f3",
+      fenBefore: "fen-2", fenAfter: "fen-3",
+    };
+    s.applyEvent({ type: "ai_move", move: move3, fen: "fen-3" });
+    st = usePlayStore.getState();
+    expect(st.game?.moves).toEqual([move1, move2, move3]);
+    expect(st.game?.fen).toBe("fen-3");
+  });
+
   it("accumulates chat_delta into one streaming message and closes on chat_done", () => {
     const s = usePlayStore.getState();
     s.start(game, character);

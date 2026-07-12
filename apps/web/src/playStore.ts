@@ -54,6 +54,12 @@ export const usePlayStore = create<PlayState>((set) => ({
       switch (event.type) {
         case "ai_move": {
           if (!state.game) return state;
+          // The server stream replays past events (ReplaySubject) — after a
+          // deep link/refresh the getPlayGame snapshot already contains the
+          // replayed moves. Skip stale plies so the move list never duplicates.
+          if (event.move.ply <= state.game.moves.length) {
+            return { thinking: false };
+          }
           return {
             game: {
               ...state.game,
