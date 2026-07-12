@@ -1,4 +1,4 @@
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Library as LibraryIcon,
   Loader2,
+  Swords,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -243,6 +244,12 @@ export function LibraryView() {
           {total} {total === 1 ? "game" : "games"}
         </span>
         <div className="ml-auto flex items-center gap-2">
+          <Button variant="ghost" size="sm" asChild>
+            <Link to="/play">
+              <Swords />
+              Play
+            </Link>
+          </Button>
           <ImportDialog />
           <Button
             variant="outline"

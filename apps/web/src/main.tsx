@@ -13,6 +13,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme/theme-provider";
 import { AnalysisView } from "@/views/AnalysisView";
 import { LibraryView } from "@/views/LibraryView";
+import { PlayView } from "@/views/PlayView";
 import "@/index.css";
 
 const queryClient = new QueryClient({
@@ -35,7 +36,13 @@ const libraryRoute = createRoute({
   component: LibraryView,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, libraryRoute]);
+const playRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/play",
+  component: PlayView,
+});
+
+const routeTree = rootRoute.addChildren([indexRoute, libraryRoute, playRoute]);
 
 const router = createRouter({
   routeTree,
